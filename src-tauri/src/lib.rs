@@ -1,6 +1,7 @@
 mod commands;
 mod db;
 mod error;
+mod market;
 mod models;
 
 use tauri::Manager;
@@ -42,6 +43,18 @@ pub fn run() {
             commands::save_market_source,
             commands::delete_market_source,
             commands::restore_market_source,
+            commands::restore_market_sources_catalog,
+            commands::test_market_source,
+            commands::approve_market_source,
+            commands::refresh_market_source,
+            commands::save_manual_market_observation,
+            commands::list_market_observations,
+            commands::list_market_snapshots,
+            commands::get_market_overview,
+            commands::start_market_research,
+            commands::get_market_research_job,
+            commands::cancel_market_research,
+            commands::open_market_source,
         ])
         .run(tauri::generate_context!())
         .expect("error al iniciar Pricing OS");

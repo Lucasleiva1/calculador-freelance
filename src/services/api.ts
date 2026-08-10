@@ -18,6 +18,13 @@ import type {
   PricingRuleInput,
   EconomicProfileInput,
   MarketSourceInput,
+  ManualObservationInput,
+  MarketObservation,
+  MarketObservationFilter,
+  MarketOverview,
+  MarketResearchJob,
+  MarketSnapshot,
+  SourceTestResult,
 } from "../domain/types";
 
 export const api = {
@@ -50,4 +57,16 @@ export const api = {
   saveMarketSource: (input: MarketSourceInput) => invoke<PricingConfiguration>("save_market_source", { input }),
   deleteMarketSource: (id: string) => invoke<PricingConfiguration>("delete_market_source", { id }),
   restoreMarketSource: (id: string) => invoke<PricingConfiguration>("restore_market_source", { id }),
+  restoreMarketSourcesCatalog: () => invoke<PricingConfiguration>("restore_market_sources_catalog"),
+  testMarketSource: (id: string) => invoke<SourceTestResult>("test_market_source", { id }),
+  approveMarketSource: (id: string) => invoke<PricingConfiguration>("approve_market_source", { id }),
+  refreshMarketSource: (id: string, force = false) => invoke<SourceTestResult>("refresh_market_source", { id, force }),
+  saveManualMarketObservation: (input: ManualObservationInput) => invoke<MarketObservation>("save_manual_market_observation", { input }),
+  listMarketObservations: (filter: MarketObservationFilter = {}) => invoke<MarketObservation[]>("list_market_observations", { filter }),
+  listMarketSnapshots: (quoteServiceId?: string) => invoke<MarketSnapshot[]>("list_market_snapshots", { quoteServiceId }),
+  getMarketOverview: (quoteServiceId: string) => invoke<MarketOverview>("get_market_overview", { quoteServiceId }),
+  startMarketResearch: (quoteServiceId: string, force = false) => invoke<MarketResearchJob>("start_market_research", { quoteServiceId, force }),
+  getMarketResearchJob: (id: string) => invoke<MarketResearchJob>("get_market_research_job", { id }),
+  cancelMarketResearch: (id: string) => invoke<MarketResearchJob>("cancel_market_research", { id }),
+  openMarketSource: (url: string) => invoke<void>("open_market_source", { url }),
 };

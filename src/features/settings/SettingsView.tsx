@@ -17,7 +17,7 @@ export function SettingsView({ settings, pricing, initialTab = "general", onSave
     {tab === "general" && <GeneralSettings settings={settings} onSave={onSave} />}
     {tab === "economy" && <EconomySettings pricing={pricing} onSave={(input) => apply(api.saveEconomicProfile(input))} />}
     {tab === "services" && <ServiceConfigurator pricing={pricing} actions={{ saveDefinition: (input) => apply(api.saveServiceDefinition(input)), saveParameter: (input) => apply(api.saveServiceParameter(input)), deleteParameter: (id) => apply(api.deleteServiceParameter(id)), saveOption: (input) => apply(api.saveParameterOption(input)), deleteOption: (id) => apply(api.deleteParameterOption(id)), saveRule: (input) => apply(api.savePricingRule(input)), deleteRule: (id) => apply(api.deletePricingRule(id)) }} />}
-    {tab === "sources" && <MarketSources pricing={pricing} onSave={(input) => apply(api.saveMarketSource(input))} onDelete={(id) => apply(api.deleteMarketSource(id))} onRestore={(id) => apply(api.restoreMarketSource(id))} />}
+    {tab === "sources" && <MarketSources pricing={pricing} onPricingChange={onPricingChange} />}
   </div>;
 }
 

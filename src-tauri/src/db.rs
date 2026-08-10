@@ -1,16 +1,20 @@
-use std::str::FromStr;
+use std::{collections::HashMap, str::FromStr, sync::Arc};
 
 use sqlx::{
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions},
     SqlitePool,
 };
 use tauri::{AppHandle, Manager};
+use tokio::sync::Mutex;
 
-use crate::error::AppResult;
+use crate::{error::AppResult, market::acquisition::http_client, models::MarketResearchJob};
 
 #[derive(Clone)]
 pub struct AppState {
     pub pool: SqlitePool,
+    pub http: reqwest::Client,
+    pub market_jobs: Arc<Mutex<HashMap<String, MarketResearchJob>>>,
+    pub market_request_lock: Arc<Mutex<()>>,
 }
 
 pub async fn initialize(app: &AppHandle) -> AppResult<AppState> {
@@ -30,7 +34,12 @@ pub async fn initialize(app: &AppHandle) -> AppResult<AppState> {
         .connect_with(options)
         .await?;
     sqlx::migrate!("./migrations").run(&pool).await?;
-    Ok(AppState { pool })
+    Ok(AppState {
+        pool,
+        http: http_client()?,
+        market_jobs: Arc::new(Mutex::new(HashMap::new())),
+        market_request_lock: Arc::new(Mutex::new(())),
+    })
 }
 
 #[cfg(test)]
@@ -84,6 +93,19 @@ mod tests {
             assert!(parameters >= 30);
             assert!(sources >= 40);
             assert_eq!(profiles, 2);
+            let automatic_sources: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM market_sources WHERE acquisition_mode='auto_http' AND automation_status='APPROVED'",
+            )
+            .fetch_one(&pool)
+            .await
+            .expect("automatic sources");
+            assert_eq!(automatic_sources, 3);
+            let (upwork_url, upwork_status, upwork_automation): (String, String, String) =
+                sqlx::query_as("SELECT base_url, current_status, automation_status FROM market_sources WHERE system_key='upwork'")
+                    .fetch_one(&pool).await.expect("upwork");
+            assert_eq!(upwork_url, "https://www.upwork.com/");
+            assert_eq!(upwork_status, "DISABLED");
+            assert_eq!(upwork_automation, "MANUAL_ONLY");
 
             let client = uuid::Uuid::new_v4().to_string();
             sqlx::query("INSERT INTO clients (id, name, status, created_at, updated_at) VALUES (?, 'ACME', 'active', 'now', 'now')")
@@ -134,6 +156,56 @@ mod tests {
             assert_eq!(saved, (Some(275_000), 2));
             reopened.close().await;
             std::fs::remove_file(path).expect("remove test database");
+        });
+    }
+
+    #[test]
+    fn market_history_is_immutable_deduplicated_and_final_price_is_protected() {
+        tauri::async_runtime::block_on(async {
+            let options = SqliteConnectOptions::from_str("sqlite::memory:")
+                .expect("valid options")
+                .create_if_missing(true)
+                .foreign_keys(true);
+            let pool = SqlitePoolOptions::new()
+                .max_connections(1)
+                .connect_with(options)
+                .await
+                .expect("pool");
+            sqlx::migrate!("./migrations")
+                .run(&pool)
+                .await
+                .expect("migration");
+
+            for id in ["observation-a", "observation-duplicate"] {
+                sqlx::query("INSERT OR IGNORE INTO market_observations (id, source_id, origin, service_type, region, currency, price_type, unit, price_value_minor, original_value_text, source_type, source_url, retrieved_at, parser_version, confidence, comparison_eligibility, raw_fingerprint, created_at) VALUES (?, 'source-yunojuno', 'MANUAL', 'video-editing', 'INTERNATIONAL', 'USD', 'PROJECT', 'por proyecto', 60000, 'USD 600', 'rate_benchmark', 'https://www.yunojuno.com/', '2026-08-10T00:00:00Z', 'test', 'HIGH', 'ELIGIBLE', 'same-fingerprint', '2026-08-10T00:00:00Z')")
+                    .bind(id).execute(&pool).await.expect("observation insert");
+            }
+            let unique_observations: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM market_observations WHERE raw_fingerprint='same-fingerprint'",
+            )
+            .fetch_one(&pool)
+            .await
+            .expect("dedup count");
+            assert_eq!(unique_observations, 1);
+
+            sqlx::query("INSERT INTO clients (id,name,status,created_at,updated_at) VALUES ('client-market','Cliente','active','now','now')").execute(&pool).await.expect("client");
+            sqlx::query("INSERT INTO projects (id,client_id,name,currency,market_scope,status,created_at,updated_at) VALUES ('project-market','client-market','Proyecto','USD','international','active','now','now')").execute(&pool).await.expect("project");
+            sqlx::query("INSERT INTO quotes (id,project_id,version,status,currency,created_at,updated_at) VALUES ('quote-market','project-market',1,'draft','USD','now','now')").execute(&pool).await.expect("quote");
+            sqlx::query("INSERT INTO quote_services (id,quote_id,service_type,title,sort_order,configuration_version,configuration_json,calculated_subtotal_minor,suggested_subtotal_minor,final_subtotal_minor,has_override,manual_subtotal_minor,row_revision,created_at,updated_at) VALUES ('service-market','quote-market','video-editing','Video',0,1,'{}',54000,65000,72000,1,72000,0,'now','now')").execute(&pool).await.expect("service");
+
+            sqlx::query("INSERT INTO market_snapshots (id,quote_id,quote_service_id,query_context_json,currency,observation_count,comparable_observation_count,source_count,minimum_filtered_minor,p25_minor,market_median_minor,p75_minor,maximum_filtered_minor,confidence_level,calculated_price_minor,suggested_price_minor,final_price_minor_at_creation,summary_json,created_at) VALUES ('snapshot-old','quote-market','service-market','{}','USD',1,1,1,58000,60000,67000,79000,90000,'LOW',54000,65000,72000,'{}','2026-08-10T00:00:00Z')").execute(&pool).await.expect("old snapshot");
+            sqlx::query("INSERT INTO market_snapshots (id,quote_id,quote_service_id,query_context_json,currency,observation_count,comparable_observation_count,source_count,minimum_filtered_minor,p25_minor,market_median_minor,p75_minor,maximum_filtered_minor,confidence_level,calculated_price_minor,suggested_price_minor,final_price_minor_at_creation,summary_json,created_at) VALUES ('snapshot-new','quote-market','service-market','{}','USD',2,2,1,65000,68000,72000,82000,95000,'LOW',54000,68000,72000,'{}','2026-08-11T00:00:00Z')").execute(&pool).await.expect("new snapshot");
+            let old_median: i64 = sqlx::query_scalar(
+                "SELECT market_median_minor FROM market_snapshots WHERE id='snapshot-old'",
+            )
+            .fetch_one(&pool)
+            .await
+            .expect("old median");
+            assert_eq!(old_median, 67_000);
+
+            sqlx::query("UPDATE quote_services SET suggested_subtotal_minor=68000 WHERE id='service-market'").execute(&pool).await.expect("suggestion update");
+            let protected: (Option<i64>, bool, Option<i64>) = sqlx::query_as("SELECT final_subtotal_minor, has_override, manual_subtotal_minor FROM quote_services WHERE id='service-market'").fetch_one(&pool).await.expect("protected final");
+            assert_eq!(protected, (Some(72_000), true, Some(72_000)));
         });
     }
 }

@@ -15,6 +15,8 @@ import type {
   SettingsInput,
   Workspace,
   PricingConfiguration,
+  MarketOverview,
+  MarketResearchJob,
 } from "../domain/types";
 import type { VideoConfiguration } from "../domain/video";
 import type { ProgrammingConfiguration } from "../domain/programming";
@@ -31,6 +33,7 @@ import { ClientsView } from "../features/clients/ClientsView";
 import { ProjectsView } from "../features/projects/ProjectsView";
 import { SettingsView } from "../features/settings/SettingsView";
 import { FutureView } from "../components/FutureView";
+import { MarketView } from "../features/market/MarketView";
 
 function presetConfiguration(config: VideoConfiguration) {
   return JSON.stringify(Object.fromEntries(Object.entries(config).filter(([key]) => !["estimatedHours", "externalCosts", "urgencyFeeMinor"].includes(key))));
@@ -46,7 +49,12 @@ export function App() {
   const [fatalError, setFatalError] = useState("");
   const [notice, setNotice] = useState("");
   const [undoService, setUndoService] = useState<QuoteService | null>(null);
+  const [marketOverview, setMarketOverview] = useState<MarketOverview | null>(null);
+  const [marketOverviewServiceId, setMarketOverviewServiceId] = useState<string | null>(null);
+  const [marketJob, setMarketJob] = useState<MarketResearchJob | null>(null);
+  const [settingsInitialTab, setSettingsInitialTab] = useState<"general" | "sources">("general");
   const closeAllowed = useRef(false);
+  const marketJobRef = useRef<string | null>(null);
 
   const onSaved = useCallback((saved: QuoteService) => {
     setWorkspace((current) => current ? { ...current, services: current.services.map((service) => service.id === saved.id ? saved : service) } : current);
@@ -98,6 +106,13 @@ export function App() {
     if (data) document.documentElement.dataset.theme = data.settings.theme;
   }, [data]);
 
+  useEffect(() => {
+    let cancelled = false;
+    if (!activeServiceId) return () => { cancelled = true; };
+    void api.getMarketOverview(activeServiceId).then((overview) => { if (!cancelled) { setMarketOverview(overview); setMarketOverviewServiceId(activeServiceId); } }).catch(() => { if (!cancelled) { setMarketOverview({ latestSnapshot: null, observations: [], history: [] }); setMarketOverviewServiceId(activeServiceId); } });
+    return () => { cancelled = true; };
+  }, [activeServiceId]);
+
   const projectResult = useMemo(() => workspace && data ? evaluateWorkspace(workspace, data.settings, data.pricing) : null, [workspace, data]);
 
   async function createProject(input: CreateProjectInput) {
@@ -107,6 +122,7 @@ export function App() {
   }
 
   async function openProject(id: string) {
+    if (marketJob?.status === "RUNNING") { setNotice("Cancelá o esperá la actualización de mercado antes de cambiar de proyecto."); return; }
     if (!(await autosave.flushAll())) { setNotice("No se pudo guardar el proyecto actual. Reintentá antes de cambiar."); return; }
     try {
       const loaded = await api.loadWorkspace(id);
@@ -244,19 +260,60 @@ export function App() {
     catch (error) { setNotice(String(error)); }
   }
 
+  async function updateMarket(force = false) {
+    if (!activeServiceId || !workspace || marketJob?.status === "RUNNING") return;
+    if (!(await autosave.flushAll())) { setNotice("No se pudo guardar el servicio antes de investigar el mercado."); return; }
+    try {
+      const started = await api.startMarketResearch(activeServiceId, force);
+      marketJobRef.current = started.id; setMarketJob(started); setNotice("");
+      void pollMarket(started.id, activeServiceId, workspace.project.id);
+    } catch (error) { setNotice(String(error)); }
+  }
+
+  async function pollMarket(jobId: string, serviceId: string, projectId: string) {
+    while (marketJobRef.current === jobId) {
+      await new Promise((resolve) => window.setTimeout(resolve, 500));
+      try {
+        const next = await api.getMarketResearchJob(jobId);
+        if (marketJobRef.current !== jobId) return;
+        setMarketJob(next);
+        if (next.status !== "RUNNING") {
+          marketJobRef.current = null;
+          if (next.status === "COMPLETED") {
+            const [overview, reloaded] = await Promise.all([api.getMarketOverview(serviceId), api.loadWorkspace(projectId)]);
+            const success = next.items.filter((item) => item.status === "SUCCESS").length;
+            const cached = next.items.filter((item) => item.status === "CACHED").length;
+            const manual = next.items.filter((item) => item.status === "MANUAL").length;
+            const unavailable = next.items.filter((item) => ["ERROR", "BLOCKED", "NEEDS_CONFIGURATION"].includes(item.status)).length;
+            setMarketOverview(overview); setMarketOverviewServiceId(serviceId); setWorkspace(reloaded); setNotice(next.error || `${success} actualizadas · ${cached} en caché · ${manual} manuales · ${unavailable} no disponibles. El precio final permaneció sin cambios.`);
+            await refresh();
+          } else if (next.status === "ERROR") setNotice(next.error || "La investigación no pudo completarse.");
+          else setNotice("Actualización de mercado cancelada.");
+          return;
+        }
+      } catch (error) { marketJobRef.current = null; setNotice(String(error)); return; }
+    }
+  }
+
+  async function cancelMarket() {
+    if (!marketJob || marketJob.status !== "RUNNING") return;
+    const cancelled = await api.cancelMarketResearch(marketJob.id); setMarketJob(cancelled);
+  }
+
   if (loading) return <div className="startup"><div className="brand__mark"><i /><i /></div><span>Preparando tu espacio de trabajo…</span></div>;
   if (fatalError || !data) return <div className="startup startup--error"><strong>No se pudo abrir Pricing OS</strong><p>{fatalError}</p><Button onClick={() => window.location.reload()}>Reintentar</Button></div>;
 
   const activeProject = workspace?.project ?? null;
   let content: React.ReactNode;
-  if (section === "workspace") content = workspace && projectResult ? <WorkspaceView workspace={workspace} settings={data.settings} pricing={data.pricing} result={projectResult} presets={data.presets} statuses={autosave.statuses} errors={autosave.errors} activeServiceId={activeServiceId} onActiveService={setActiveServiceId} onAddService={addService} onVideoChange={videoChange} onProgrammingChange={programmingChange} onFinalPriceChange={finalPriceChange} onTitleChange={(service, title) => queueService(service, { title })} onDeleteService={deleteService} onMoveService={moveService} onRetry={autosave.retry} onSavePreset={savePreset} onUpdatePreset={updatePreset} onDeletePreset={deletePreset} onRestorePreset={restorePreset} /> : <div className="view-page"><EmptyState eyebrow="Pricing OS" title="Creá tu primer proyecto" description="El proyecto organiza cliente, moneda, cotización y servicios en un único workspace." action={<Button variant="accent" onClick={() => setNewProjectOpen(true)}>Nuevo proyecto</Button>} /></div>;
+  if (section === "workspace") content = workspace && projectResult ? <WorkspaceView workspace={workspace} settings={data.settings} pricing={data.pricing} result={projectResult} presets={data.presets} statuses={autosave.statuses} errors={autosave.errors} activeServiceId={activeServiceId} onActiveService={setActiveServiceId} onAddService={addService} onVideoChange={videoChange} onProgrammingChange={programmingChange} onFinalPriceChange={finalPriceChange} onTitleChange={(service, title) => queueService(service, { title })} onDeleteService={deleteService} onMoveService={moveService} onRetry={autosave.retry} onSavePreset={savePreset} onUpdatePreset={updatePreset} onDeletePreset={deletePreset} onRestorePreset={restorePreset} market={marketOverviewServiceId === activeServiceId ? marketOverview : null} marketJob={marketJob?.quoteServiceId === activeServiceId ? marketJob : null} onUpdateMarket={updateMarket} onCancelMarket={cancelMarket} /> : <div className="view-page"><EmptyState eyebrow="Pricing OS" title="Creá tu primer proyecto" description="El proyecto organiza cliente, moneda, cotización y servicios en un único workspace." action={<Button variant="accent" onClick={() => setNewProjectOpen(true)}>Nuevo proyecto</Button>} /></div>;
   else if (section === "clients") content = <ClientsView clients={data.clients} projects={data.projects} onSave={saveClient} onArchive={archiveClient} onOpenProject={openProject} />;
   else if (section === "projects") content = <ProjectsView projects={data.projects} onNew={() => setNewProjectOpen(true)} onOpen={openProject} onArchive={archiveProject} />;
-  else if (section === "settings" || section === "services" || section === "market") content = <SettingsView key={section} settings={data.settings} pricing={data.pricing} initialTab={section === "services" ? "services" : section === "market" ? "sources" : "general"} onSave={saveSettings} onPricingChange={pricingChange} />;
+  else if (section === "market") content = <MarketView pricing={data.pricing} activeServiceId={activeServiceId} job={marketJob} onResearch={updateMarket} onCancel={cancelMarket} onConfigureSources={() => { setSettingsInitialTab("sources"); setSection("settings"); }} />;
+  else if (section === "settings" || section === "services") content = <SettingsView key={`${section}-${settingsInitialTab}`} settings={data.settings} pricing={data.pricing} initialTab={section === "services" ? "services" : settingsInitialTab} onSave={saveSettings} onPricingChange={pricingChange} />;
   else content = <FutureView eyebrow="Versionado futuro" title="Historial" description="Las cotizaciones ya tienen versión y estado; el historial comparativo se activará más adelante." icon={Clock3} />;
 
   return <div className="app-shell">
-    <Sidebar section={section} onSection={setSection} onNewProject={() => setNewProjectOpen(true)} />
+    <Sidebar section={section} onSection={(next) => { if (next === "settings") setSettingsInitialTab("general"); setSection(next); }} onNewProject={() => setNewProjectOpen(true)} />
     <div className="app-body"><Topbar project={activeProject} projects={data.projects} theme={data.settings.theme} usdToArsMicros={data.settings.usdToArsMicros} onProject={openProject} onNewProject={() => setNewProjectOpen(true)} onCurrency={changeCurrency} onToggleTheme={toggleTheme} onSettings={() => setSection("settings")} />{notice && <div className="notice" role="status"><span>{notice}</span>{undoService && <button onClick={restoreDeletedService}>Deshacer</button>}<button onClick={() => { setNotice(""); setUndoService(null); }}>Cerrar</button></div>}{content}</div>
     {newProjectOpen && <NewProjectModal clients={data.clients} onClose={() => setNewProjectOpen(false)} onCreate={createProject} />}
   </div>;

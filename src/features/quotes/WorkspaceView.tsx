@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { ArrowDown, ArrowUp, Code2, Film, FileOutput, Plus, Trash2 } from "lucide-react";
 import type {
   AppSettings,
+  MarketOverview,
+  MarketResearchJob,
   PricingConfiguration,
   Preset,
   QuoteService,
@@ -49,6 +51,10 @@ export function WorkspaceView({
   onUpdatePreset,
   onDeletePreset,
   onRestorePreset,
+  market,
+  marketJob,
+  onUpdateMarket,
+  onCancelMarket,
 }: {
   workspace: Workspace;
   settings: AppSettings;
@@ -71,6 +77,10 @@ export function WorkspaceView({
   onUpdatePreset: (preset: Preset, config: VideoConfiguration) => Promise<void>;
   onDeletePreset: (preset: Preset) => Promise<void>;
   onRestorePreset: (preset: Preset) => Promise<void>;
+  market: MarketOverview | null;
+  marketJob: MarketResearchJob | null;
+  onUpdateMarket: (force?: boolean) => Promise<void>;
+  onCancelMarket: () => Promise<void>;
 }) {
   const [addOpen, setAddOpen] = useState(false);
   useEffect(() => {
@@ -107,7 +117,7 @@ export function WorkspaceView({
         </section>}
       </div>
     </main>
-    <ResultInspector key={activeServiceId ?? "empty"} result={result} currency={workspace.quote.currency} activeServiceId={activeServiceId} suggestionsEnabled={settings.suggestionsEnabled} onFinalPriceChange={active ? (final, reason) => onFinalPriceChange(active, final, reason) : undefined} />
+    <ResultInspector key={activeServiceId ?? "empty"} result={result} currency={workspace.quote.currency} activeServiceId={activeServiceId} suggestionsEnabled={settings.suggestionsEnabled} market={market} marketJob={marketJob} onUpdateMarket={onUpdateMarket} onCancelMarket={onCancelMarket} onFinalPriceChange={active ? (final, reason) => onFinalPriceChange(active, final, reason) : undefined} />
     <footer className="actionbar"><div className="actionbar__summary"><FileOutput size={20} /><span>Resumen del proyecto</span><i /><strong>{workspace.services.length} {workspace.services.length === 1 ? "servicio" : "servicios"}</strong><StatusDot /><i /><span>{result.isPartial ? "Subtotal parcial" : "Total"}</span><b>{formatMoney(result.totalMinor, workspace.quote.currency)}</b></div><div className="actionbar__actions"><Button disabled>Guardar borrador</Button><Button variant="accent" disabled>Generar presupuesto · Próximamente</Button><Button disabled>Exportar / PDF</Button></div></footer>
   </div>;
 }

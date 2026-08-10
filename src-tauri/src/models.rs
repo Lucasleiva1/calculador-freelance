@@ -184,7 +184,7 @@ pub struct EconomicProfile {
     pub updated_at: String,
 }
 
-#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 #[serde(rename_all = "camelCase")]
 pub struct MarketSource {
     pub id: String,
@@ -202,8 +202,150 @@ pub struct MarketSource {
     pub is_system_source: bool,
     pub system_key: Option<String>,
     pub default_data_json: Option<String>,
+    pub purpose: Option<String>,
+    pub data_contribution: Option<String>,
+    pub app_benefit: Option<String>,
+    pub participates_in_suggestions: bool,
+    pub automation_status: String,
+    pub current_status: String,
+    pub adapter_key: Option<String>,
+    pub last_request_at: Option<String>,
+    pub last_success_at: Option<String>,
+    pub last_failure_at: Option<String>,
+    pub cooldown_until: Option<String>,
+    pub consecutive_failures: i64,
+    pub last_http_status: Option<i64>,
+    pub last_error: Option<String>,
+    pub observation_count: i64,
+    pub archived_at: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
+pub struct MarketObservation {
+    pub id: String,
+    pub source_id: String,
+    pub source_name: String,
+    pub origin: String,
+    pub service_type: String,
+    pub subservice: Option<String>,
+    pub category: Option<String>,
+    pub region: String,
+    pub country: Option<String>,
+    pub currency: String,
+    pub price_type: String,
+    pub unit: String,
+    pub price_min_minor: Option<i64>,
+    pub price_max_minor: Option<i64>,
+    pub price_value_minor: Option<i64>,
+    pub original_value_text: String,
+    pub converted_value_minor: Option<i64>,
+    pub converted_currency: Option<String>,
+    pub exchange_rate_micros: Option<i64>,
+    pub exchange_rate_date: Option<String>,
+    pub exchange_rate_source: Option<String>,
+    pub experience_level: Option<String>,
+    pub client_tier: Option<String>,
+    pub source_type: String,
+    pub source_url: String,
+    pub published_at: Option<String>,
+    pub retrieved_at: String,
+    pub parser_version: String,
+    pub confidence: String,
+    pub comparison_eligibility: String,
+    pub exclusion_reason: Option<String>,
+    pub raw_fingerprint: String,
+    pub evidence_snippet: Option<String>,
+    pub notes: Option<String>,
+    pub created_at: String,
+    pub snapshot_included: Option<bool>,
+    pub snapshot_exclusion_reason: Option<String>,
+    pub snapshot_normalized_value_minor: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
+pub struct MarketSnapshot {
+    pub id: String,
+    pub quote_id: Option<String>,
+    pub quote_service_id: Option<String>,
+    pub query_context_json: String,
+    pub currency: String,
+    pub observation_count: i64,
+    pub comparable_observation_count: i64,
+    pub source_count: i64,
+    pub minimum_filtered_minor: Option<i64>,
+    pub p25_minor: Option<i64>,
+    pub market_median_minor: Option<i64>,
+    pub p75_minor: Option<i64>,
+    pub maximum_filtered_minor: Option<i64>,
+    pub confidence_level: String,
+    pub calculated_price_minor: Option<i64>,
+    pub suggested_price_minor: Option<i64>,
+    pub final_price_minor_at_creation: Option<i64>,
+    pub summary_json: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MarketOverview {
+    pub latest_snapshot: Option<MarketSnapshot>,
+    pub observations: Vec<MarketObservation>,
+    pub history: Vec<MarketSnapshot>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MarketResearchJobItem {
+    pub source_id: String,
+    pub source_name: String,
+    pub status: String,
+    pub message: Option<String>,
+    pub observation_count: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MarketResearchJob {
+    pub id: String,
+    pub quote_service_id: String,
+    pub status: String,
+    pub completed: i64,
+    pub total: i64,
+    pub cancel_requested: bool,
+    pub items: Vec<MarketResearchJobItem>,
+    pub snapshot_id: Option<String>,
+    pub error: Option<String>,
+    pub started_at: String,
+    pub finished_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceTestResult {
+    pub source_id: String,
+    pub status: String,
+    pub message: String,
+    pub http_status: Option<i64>,
+    pub observations: Vec<MarketObservationPreview>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MarketObservationPreview {
+    pub service_type: String,
+    pub subservice: Option<String>,
+    pub price_min_minor: Option<i64>,
+    pub price_max_minor: Option<i64>,
+    pub price_value_minor: Option<i64>,
+    pub currency: String,
+    pub unit: String,
+    pub price_type: String,
+    pub region: String,
+    pub evidence: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -387,4 +529,41 @@ pub struct MarketSourceInput {
     pub acquisition_mode: String,
     pub cooldown_hours: Option<i64>,
     pub notes: Option<String>,
+    pub purpose: Option<String>,
+    pub data_contribution: Option<String>,
+    pub app_benefit: Option<String>,
+    pub participates_in_suggestions: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManualObservationInput {
+    pub source_id: String,
+    pub service_type: String,
+    pub subservice: Option<String>,
+    pub category: Option<String>,
+    pub region: String,
+    pub country: Option<String>,
+    pub currency: String,
+    pub price_type: String,
+    pub unit: String,
+    pub price_min_minor: Option<i64>,
+    pub price_max_minor: Option<i64>,
+    pub price_value_minor: Option<i64>,
+    pub experience_level: Option<String>,
+    pub client_tier: Option<String>,
+    pub published_at: Option<String>,
+    pub source_url: String,
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct MarketObservationFilter {
+    pub service_type: Option<String>,
+    pub region: Option<String>,
+    pub source_id: Option<String>,
+    pub price_type: Option<String>,
+    pub currency: Option<String>,
+    pub query: Option<String>,
 }

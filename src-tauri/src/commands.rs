@@ -9,10 +9,12 @@ use crate::{
     error::{command_error, AppError, AppResult},
     models::{
         AppSettings, Bootstrap, Client, ClientInput, CreateProjectInput, EconomicProfile,
-        EconomicProfileInput, MarketSource, MarketSourceInput, ParameterOption,
-        ParameterOptionInput, Preset, PresetInput, PricingConfiguration, PricingRule,
-        PricingRuleInput, ProjectSummary, Quote, QuoteService, SaveServiceInput, ServiceDefinition,
-        ServiceDefinitionInput, ServiceParameter, ServiceParameterInput, SettingsInput, Workspace,
+        EconomicProfileInput, ManualObservationInput, MarketObservation, MarketObservationFilter,
+        MarketOverview, MarketResearchJob, MarketSnapshot, MarketSource, MarketSourceInput,
+        ParameterOption, ParameterOptionInput, Preset, PresetInput, PricingConfiguration,
+        PricingRule, PricingRuleInput, ProjectSummary, Quote, QuoteService, SaveServiceInput,
+        ServiceDefinition, ServiceDefinitionInput, ServiceParameter, ServiceParameterInput,
+        SettingsInput, SourceTestResult, Workspace,
     },
 };
 
@@ -137,8 +139,12 @@ async fn pricing_configuration(pool: &SqlitePool) -> AppResult<PricingConfigurat
     let market_sources = sqlx::query_as::<_, MarketSource>(
         "SELECT id, name, base_url, source_type, regions_json, supported_services_json,
                 priority, enabled, usage_mode, acquisition_mode, cooldown_hours, notes,
-                is_system_source, system_key, default_data_json, created_at, updated_at
-         FROM market_sources ORDER BY priority, name COLLATE NOCASE",
+                is_system_source, system_key, default_data_json, purpose, data_contribution,
+                app_benefit, participates_in_suggestions, automation_status, current_status,
+                adapter_key, last_request_at, last_success_at, last_failure_at, cooldown_until,
+                consecutive_failures, last_http_status, last_error, observation_count, archived_at,
+                created_at, updated_at
+         FROM market_sources WHERE archived_at IS NULL ORDER BY priority, name COLLATE NOCASE",
     )
     .fetch_all(pool)
     .await?;
@@ -933,76 +939,155 @@ pub async fn save_economic_profile(
     }.await.map_err(command_error)
 }
 
+async fn upsert_market_source(pool: &SqlitePool, input: MarketSourceInput) -> AppResult<()> {
+    if input.name.trim().is_empty() {
+        return Err(AppError::Validation(
+            "El nombre de la fuente es obligatorio.".into(),
+        ));
+    }
+    let regions: Vec<String> = serde_json::from_str(&input.regions_json)?;
+    let services: Vec<String> = serde_json::from_str(&input.supported_services_json)?;
+    if regions.is_empty()
+        || services.is_empty()
+        || regions
+            .iter()
+            .chain(&services)
+            .any(|item| item.trim().is_empty())
+    {
+        return Err(AppError::Validation(
+            "La fuente necesita al menos una región y un servicio válidos.".into(),
+        ));
+    }
+    if input.priority < 0
+        || input
+            .cooldown_hours
+            .is_some_and(|hours| !(0..=720).contains(&hours))
+    {
+        return Err(AppError::Validation(
+            "Prioridad o cooldown fuera de rango.".into(),
+        ));
+    }
+    let purpose = clean_optional(input.purpose)
+        .ok_or_else(|| AppError::Validation("Indicá qué ofrece esta fuente.".into()))?;
+    let contribution = clean_optional(input.data_contribution)
+        .ok_or_else(|| AppError::Validation("Indicá qué dato aporta esta fuente.".into()))?;
+    let benefit = clean_optional(input.app_benefit).ok_or_else(|| {
+        AppError::Validation("Indicá cómo ayuda esta fuente a Pricing OS.".into())
+    })?;
+    let allowed_types = [
+        "freelance_marketplace",
+        "rate_benchmark",
+        "professional_tariff",
+        "salary",
+        "job_board",
+        "agency_pricing",
+        "methodology",
+        "currency",
+        "other",
+    ];
+    let allowed_usage = [
+        "market_price",
+        "salary_context",
+        "rate_methodology",
+        "currency",
+        "context_only",
+    ];
+    let allowed_acquisition = ["auto_http", "auto_browser", "manual", "disabled"];
+    if !allowed_types.contains(&input.source_type.as_str())
+        || !allowed_usage.contains(&input.usage_mode.as_str())
+        || !allowed_acquisition.contains(&input.acquisition_mode.as_str())
+    {
+        return Err(AppError::Validation(
+            "Clasificación de fuente inválida.".into(),
+        ));
+    }
+    let is_new = input.id.is_none();
+    let id = input.id.unwrap_or_else(|| Uuid::new_v4().to_string());
+    let base_url = clean_optional(input.base_url);
+    if let Some(url) = base_url.as_deref() {
+        crate::market::validation::validate_public_https(url)?;
+    }
+    let existing: Option<(String, Option<String>)> =
+        sqlx::query_as("SELECT automation_status, adapter_key FROM market_sources WHERE id=?")
+            .bind(&id)
+            .fetch_optional(pool)
+            .await?;
+    let automation_status = existing
+        .as_ref()
+        .map(|item| item.0.as_str())
+        .unwrap_or("UNREVIEWED");
+    let acquisition_mode = if is_new {
+        "manual".to_string()
+    } else if input.acquisition_mode == "auto_http" && automation_status != "APPROVED" {
+        return Err(AppError::Validation(
+            "Probá y aprobá la fuente antes de activar AUTO_HTTP.".into(),
+        ));
+    } else {
+        input.acquisition_mode
+    };
+    let current_status = if !input.enabled {
+        "DISABLED"
+    } else if acquisition_mode == "manual" {
+        "MANUAL"
+    } else {
+        "READY"
+    };
+    let participates = input.participates_in_suggestions && input.usage_mode == "market_price";
+    let timestamp = now();
+    sqlx::query(
+        "INSERT INTO market_sources (id, name, base_url, source_type, regions_json,
+         supported_services_json, priority, enabled, usage_mode, acquisition_mode,
+         cooldown_hours, notes, is_system_source, purpose, data_contribution, app_benefit,
+         participates_in_suggestions, automation_status, current_status, adapter_key,
+         created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET name=excluded.name, base_url=excluded.base_url,
+         source_type=excluded.source_type, regions_json=excluded.regions_json,
+         supported_services_json=excluded.supported_services_json, priority=excluded.priority,
+         enabled=excluded.enabled, usage_mode=excluded.usage_mode,
+         acquisition_mode=excluded.acquisition_mode, cooldown_hours=excluded.cooldown_hours,
+         notes=excluded.notes, purpose=excluded.purpose,
+         data_contribution=excluded.data_contribution, app_benefit=excluded.app_benefit,
+         participates_in_suggestions=excluded.participates_in_suggestions,
+         current_status=excluded.current_status, archived_at=NULL,
+         updated_at=excluded.updated_at",
+    )
+    .bind(id)
+    .bind(input.name.trim())
+    .bind(base_url)
+    .bind(input.source_type)
+    .bind(serde_json::to_string(&regions)?)
+    .bind(serde_json::to_string(&services)?)
+    .bind(input.priority)
+    .bind(input.enabled)
+    .bind(input.usage_mode)
+    .bind(acquisition_mode)
+    .bind(input.cooldown_hours)
+    .bind(clean_optional(input.notes))
+    .bind(purpose)
+    .bind(contribution)
+    .bind(benefit)
+    .bind(participates)
+    .bind(if is_new {
+        "UNREVIEWED"
+    } else {
+        automation_status
+    })
+    .bind(current_status)
+    .bind(&timestamp)
+    .bind(&timestamp)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn save_market_source(
     input: MarketSourceInput,
     state: State<'_, AppState>,
 ) -> Result<PricingConfiguration, String> {
     async {
-        if input.name.trim().is_empty() {
-            return Err(AppError::Validation(
-                "El nombre de la fuente es obligatorio.".into(),
-            ));
-        }
-        let _: Value = serde_json::from_str(&input.regions_json)?;
-        let _: Value = serde_json::from_str(&input.supported_services_json)?;
-        let allowed_types = [
-            "freelance_marketplace",
-            "rate_benchmark",
-            "professional_tariff",
-            "salary",
-            "job_board",
-            "agency_pricing",
-            "methodology",
-            "currency",
-            "other",
-        ];
-        let allowed_usage = [
-            "market_price",
-            "salary_context",
-            "rate_methodology",
-            "currency",
-            "context_only",
-        ];
-        let allowed_acquisition = ["auto_http", "auto_browser", "manual", "disabled"];
-        if !allowed_types.contains(&input.source_type.as_str())
-            || !allowed_usage.contains(&input.usage_mode.as_str())
-            || !allowed_acquisition.contains(&input.acquisition_mode.as_str())
-        {
-            return Err(AppError::Validation(
-                "Clasificación de fuente inválida.".into(),
-            ));
-        }
-        let id = input.id.unwrap_or_else(|| Uuid::new_v4().to_string());
-        let timestamp = now();
-        sqlx::query(
-            "INSERT INTO market_sources (id, name, base_url, source_type, regions_json,
-             supported_services_json, priority, enabled, usage_mode, acquisition_mode,
-             cooldown_hours, notes, is_system_source, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
-             ON CONFLICT(id) DO UPDATE SET name=excluded.name, base_url=excluded.base_url,
-             source_type=excluded.source_type, regions_json=excluded.regions_json,
-             supported_services_json=excluded.supported_services_json, priority=excluded.priority,
-             enabled=excluded.enabled, usage_mode=excluded.usage_mode,
-             acquisition_mode=excluded.acquisition_mode, cooldown_hours=excluded.cooldown_hours,
-             notes=excluded.notes, updated_at=excluded.updated_at",
-        )
-        .bind(id)
-        .bind(input.name.trim())
-        .bind(clean_optional(input.base_url))
-        .bind(input.source_type)
-        .bind(input.regions_json)
-        .bind(input.supported_services_json)
-        .bind(input.priority)
-        .bind(input.enabled)
-        .bind(input.usage_mode)
-        .bind(input.acquisition_mode)
-        .bind(input.cooldown_hours)
-        .bind(clean_optional(input.notes))
-        .bind(&timestamp)
-        .bind(&timestamp)
-        .execute(&state.pool)
-        .await?;
+        upsert_market_source(&state.pool, input).await?;
         pricing_configuration(&state.pool).await
     }
     .await
@@ -1015,14 +1100,14 @@ pub async fn delete_market_source(
     state: State<'_, AppState>,
 ) -> Result<PricingConfiguration, String> {
     async {
-        let result = sqlx::query("DELETE FROM market_sources WHERE id=? AND is_system_source=0")
+        let result = sqlx::query("UPDATE market_sources SET archived_at=?, enabled=0, current_status='DISABLED', updated_at=? WHERE id=? AND archived_at IS NULL")
+            .bind(now())
+            .bind(now())
             .bind(id)
             .execute(&state.pool)
             .await?;
         if result.rows_affected() == 0 {
-            return Err(AppError::Validation(
-                "Las fuentes del catálogo se restauran; no se eliminan.".into(),
-            ));
+            return Err(AppError::NotFound);
         }
         pricing_configuration(&state.pool).await
     }
@@ -1040,23 +1125,276 @@ pub async fn restore_market_source(
             "SELECT default_data_json FROM market_sources WHERE id=? AND is_system_source=1",
         ).bind(&id).fetch_optional(&state.pool).await?.flatten().ok_or(AppError::NotFound)?;
         let value: Value = serde_json::from_str(&default_json)?;
-        let enabled = value.get("enabled").and_then(Value::as_bool).unwrap_or(false);
+        let enabled = value
+            .get("enabled")
+            .and_then(|value| {
+                value
+                    .as_bool()
+                    .or_else(|| value.as_i64().map(|number| number != 0))
+            })
+            .unwrap_or(false);
         let priority = value.get("priority").and_then(Value::as_i64).unwrap_or(0);
-        let acquisition = value.get("acquisitionMode").and_then(Value::as_str).unwrap_or("disabled");
-        sqlx::query("UPDATE market_sources SET enabled=?, priority=?, acquisition_mode=?, updated_at=? WHERE id=?")
-            .bind(enabled).bind(priority).bind(acquisition).bind(now()).bind(id).execute(&state.pool).await?;
+        let acquisition = value.get("acquisitionMode").and_then(Value::as_str).unwrap_or("manual");
+        let default_automation = value.get("automationStatus").and_then(Value::as_str).unwrap_or("MANUAL_ONLY");
+        let status = if default_automation == "BLOCKED" { "BLOCKED" } else if !enabled { "DISABLED" } else if acquisition == "manual" { "MANUAL" } else { "READY" };
+        sqlx::query("UPDATE market_sources SET name=COALESCE(json_extract(default_data_json,'$.name'),name), base_url=json_extract(default_data_json,'$.baseUrl'), source_type=COALESCE(json_extract(default_data_json,'$.sourceType'),source_type), regions_json=COALESCE(json_extract(default_data_json,'$.regionsJson'),regions_json), supported_services_json=COALESCE(json_extract(default_data_json,'$.supportedServicesJson'),supported_services_json), enabled=?, priority=?, usage_mode=COALESCE(json_extract(default_data_json,'$.usageMode'),usage_mode), acquisition_mode=?, cooldown_hours=COALESCE(json_extract(default_data_json,'$.cooldownHours'),cooldown_hours), purpose=json_extract(default_data_json,'$.purpose'), data_contribution=json_extract(default_data_json,'$.dataContribution'), app_benefit=json_extract(default_data_json,'$.appBenefit'), participates_in_suggestions=COALESCE(json_extract(default_data_json,'$.participatesInSuggestions'),0), automation_status=COALESCE(json_extract(default_data_json,'$.automationStatus'),'MANUAL_ONLY'), adapter_key=json_extract(default_data_json,'$.adapterKey'), current_status=?, archived_at=NULL, last_error=json_extract(default_data_json,'$.lastError'), consecutive_failures=0, updated_at=? WHERE id=?")
+            .bind(enabled).bind(priority).bind(acquisition).bind(status).bind(now()).bind(id).execute(&state.pool).await?;
         pricing_configuration(&state.pool).await
     }.await.map_err(command_error)
 }
 
+#[tauri::command]
+pub async fn restore_market_sources_catalog(
+    state: State<'_, AppState>,
+) -> Result<PricingConfiguration, String> {
+    async {
+        sqlx::query(
+            "UPDATE market_sources SET
+             name=COALESCE(json_extract(default_data_json,'$.name'),name),
+             base_url=json_extract(default_data_json,'$.baseUrl'),
+             source_type=COALESCE(json_extract(default_data_json,'$.sourceType'),source_type),
+             regions_json=COALESCE(json_extract(default_data_json,'$.regionsJson'),regions_json),
+             supported_services_json=COALESCE(json_extract(default_data_json,'$.supportedServicesJson'),supported_services_json),
+             priority=COALESCE(json_extract(default_data_json,'$.priority'),priority),
+             enabled=COALESCE(json_extract(default_data_json,'$.enabled'),0),
+             usage_mode=COALESCE(json_extract(default_data_json,'$.usageMode'),usage_mode),
+             acquisition_mode=COALESCE(json_extract(default_data_json,'$.acquisitionMode'),'manual'),
+             cooldown_hours=COALESCE(json_extract(default_data_json,'$.cooldownHours'),24),
+             purpose=json_extract(default_data_json,'$.purpose'),
+             data_contribution=json_extract(default_data_json,'$.dataContribution'),
+             app_benefit=json_extract(default_data_json,'$.appBenefit'),
+             participates_in_suggestions=COALESCE(json_extract(default_data_json,'$.participatesInSuggestions'),0),
+             automation_status=COALESCE(json_extract(default_data_json,'$.automationStatus'),'MANUAL_ONLY'),
+             adapter_key=json_extract(default_data_json,'$.adapterKey'),
+             current_status=CASE
+               WHEN COALESCE(json_extract(default_data_json,'$.automationStatus'),'MANUAL_ONLY')='BLOCKED' THEN 'BLOCKED'
+               WHEN COALESCE(json_extract(default_data_json,'$.enabled'),0)=0 THEN 'DISABLED'
+               WHEN COALESCE(json_extract(default_data_json,'$.acquisitionMode'),'manual')='manual' THEN 'MANUAL'
+               ELSE 'READY' END,
+             archived_at=NULL, last_error=json_extract(default_data_json,'$.lastError'), consecutive_failures=0, updated_at=?
+             WHERE is_system_source=1",
+        )
+        .bind(now())
+        .execute(&state.pool)
+        .await?;
+        pricing_configuration(&state.pool).await
+    }
+    .await
+    .map_err(command_error)
+}
+
+#[tauri::command]
+pub async fn test_market_source(
+    id: String,
+    state: State<'_, AppState>,
+) -> Result<SourceTestResult, String> {
+    crate::market::test_source(state.inner(), &id)
+        .await
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub async fn approve_market_source(
+    id: String,
+    state: State<'_, AppState>,
+) -> Result<PricingConfiguration, String> {
+    async {
+        crate::market::approve_source(state.inner(), &id).await?;
+        pricing_configuration(&state.pool).await
+    }
+    .await
+    .map_err(command_error)
+}
+
+#[tauri::command]
+pub async fn refresh_market_source(
+    id: String,
+    force: bool,
+    state: State<'_, AppState>,
+) -> Result<SourceTestResult, String> {
+    crate::market::refresh_single_source(state.inner(), &id, force)
+        .await
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub async fn save_manual_market_observation(
+    input: ManualObservationInput,
+    state: State<'_, AppState>,
+) -> Result<MarketObservation, String> {
+    crate::market::create_manual_observation(state.inner(), input)
+        .await
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub async fn list_market_observations(
+    filter: MarketObservationFilter,
+    state: State<'_, AppState>,
+) -> Result<Vec<MarketObservation>, String> {
+    crate::market::list_observations(state.inner(), filter)
+        .await
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub async fn list_market_snapshots(
+    quote_service_id: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<Vec<MarketSnapshot>, String> {
+    crate::market::list_snapshots(state.inner(), quote_service_id.as_deref())
+        .await
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub async fn get_market_overview(
+    quote_service_id: String,
+    state: State<'_, AppState>,
+) -> Result<MarketOverview, String> {
+    crate::market::market_overview(state.inner(), &quote_service_id)
+        .await
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub async fn start_market_research(
+    quote_service_id: String,
+    force: bool,
+    state: State<'_, AppState>,
+) -> Result<MarketResearchJob, String> {
+    let job = crate::market::start_job_record(state.inner(), &quote_service_id)
+        .await
+        .map_err(command_error)?;
+    let cloned = state.inner().clone();
+    let job_id = job.id.clone();
+    tauri::async_runtime::spawn(async move {
+        crate::market::run_research_job(cloned, job_id, force).await;
+    });
+    Ok(job)
+}
+
+#[tauri::command]
+pub async fn get_market_research_job(
+    id: String,
+    state: State<'_, AppState>,
+) -> Result<MarketResearchJob, String> {
+    crate::market::get_job(state.inner(), &id)
+        .await
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub async fn cancel_market_research(
+    id: String,
+    state: State<'_, AppState>,
+) -> Result<MarketResearchJob, String> {
+    crate::market::cancel_job(state.inner(), &id)
+        .await
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub fn open_market_source(url: String) -> Result<(), String> {
+    crate::market::open_source(&url).map_err(command_error)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::convert_minor;
+    use std::str::FromStr;
+
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+
+    use super::{convert_minor, upsert_market_source};
+    use crate::models::MarketSourceInput;
 
     #[test]
     fn currency_conversion_round_trip_is_stable() {
         let ars = convert_minor(10_000, "USD", "ARS", 13_205_000);
         assert_eq!(ars, 13_205_000);
         assert_eq!(convert_minor(ars, "ARS", "USD", 13_205_000), 10_000);
+    }
+
+    #[test]
+    fn custom_market_source_can_be_added_and_edited_safely() {
+        tauri::async_runtime::block_on(async {
+            let options = SqliteConnectOptions::from_str("sqlite::memory:")
+                .expect("valid options")
+                .create_if_missing(true)
+                .foreign_keys(true);
+            let pool = SqlitePoolOptions::new()
+                .max_connections(1)
+                .connect_with(options)
+                .await
+                .expect("pool");
+            sqlx::migrate!("./migrations")
+                .run(&pool)
+                .await
+                .expect("migration");
+            upsert_market_source(
+                &pool,
+                MarketSourceInput {
+                    id: None,
+                    name: "Nueva referencia".into(),
+                    base_url: Some("https://example.com/rates".into()),
+                    source_type: "rate_benchmark".into(),
+                    regions_json: r#"["LATAM"]"#.into(),
+                    supported_services_json: r#"["programming"]"#.into(),
+                    priority: 50,
+                    enabled: true,
+                    usage_mode: "market_price".into(),
+                    acquisition_mode: "auto_http".into(),
+                    cooldown_hours: Some(24),
+                    notes: None,
+                    purpose: Some("Publica tarifas de referencia.".into()),
+                    data_contribution: Some("Rango, moneda y unidad.".into()),
+                    app_benefit: Some("Contrasta el cálculo interno.".into()),
+                    participates_in_suggestions: true,
+                },
+            )
+            .await
+            .expect("insert source");
+            let (id, acquisition, automation, participates): (String, String, String, bool) =
+                sqlx::query_as("SELECT id, acquisition_mode, automation_status, participates_in_suggestions FROM market_sources WHERE name='Nueva referencia'")
+                    .fetch_one(&pool).await.expect("source");
+            assert_eq!(acquisition, "manual");
+            assert_eq!(automation, "UNREVIEWED");
+            assert!(participates);
+
+            upsert_market_source(
+                &pool,
+                MarketSourceInput {
+                    id: Some(id),
+                    name: "Referencia salarial".into(),
+                    base_url: Some("https://example.com/salaries".into()),
+                    source_type: "salary".into(),
+                    regions_json: r#"["LATAM"]"#.into(),
+                    supported_services_json: r#"["programming"]"#.into(),
+                    priority: 51,
+                    enabled: true,
+                    usage_mode: "salary_context".into(),
+                    acquisition_mode: "manual".into(),
+                    cooldown_hours: Some(48),
+                    notes: None,
+                    purpose: Some("Publica salarios.".into()),
+                    data_contribution: Some("Rango mensual y rol.".into()),
+                    app_benefit: Some("Aporta contexto separado.".into()),
+                    participates_in_suggestions: true,
+                },
+            )
+            .await
+            .expect("update source");
+            let (name, participates): (String, bool) = sqlx::query_as(
+                "SELECT name, participates_in_suggestions FROM market_sources WHERE name='Referencia salarial'",
+            )
+            .fetch_one(&pool)
+            .await
+            .expect("updated source");
+            assert_eq!(name, "Referencia salarial");
+            assert!(
+                !participates,
+                "salary context never feeds a price suggestion"
+            );
+        });
     }
 }

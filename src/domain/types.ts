@@ -6,6 +6,10 @@ export type SaveStatus = "idle" | "saving" | "saved" | "error";
 export type SuggestionStrategy = "competitive" | "balanced" | "premium";
 export type ParameterType = "single_select" | "multi_select" | "boolean" | "number" | "duration" | "currency" | "percentage" | "text";
 export type PricingRuleType = "fixed_amount" | "hours" | "per_unit" | "percentage" | "multiplier" | "external_cost";
+export type AcquisitionMode = "auto_http" | "auto_browser" | "manual" | "disabled";
+export type AutomationStatus = "APPROVED" | "UNREVIEWED" | "MANUAL_ONLY" | "BLOCKED";
+export type MarketSourceStatus = "READY" | "FETCHING" | "SUCCESS" | "CACHED" | "MANUAL" | "BLOCKED" | "ERROR" | "DISABLED" | "NEEDS_CONFIGURATION";
+export type MarketPriceType = "HOURLY" | "DAILY" | "PROJECT" | "PER_MINUTE" | "PER_ITEM" | "MONTHLY_SALARY" | "ANNUAL_SALARY" | "FIXED" | "RANGE" | "UNKNOWN";
 
 export interface Client { id: string; name: string; company: string | null; email: string | null; whatsapp: string | null; country: string | null; notes: string | null; status: "active" | "archived"; createdAt: string; updatedAt: string; }
 export interface ProjectSummary { id: string; clientId: string; clientName: string; name: string; currency: Currency; marketScope: MarketScope | null; status: "active" | "archived"; totalMinor: number | null; unpricedCount: number; updatedAt: string; }
@@ -46,7 +50,48 @@ export interface ServiceParameter {
 export interface ParameterOption { id: string; parameterId: string; label: string; value: string; sortOrder: number; enabled: boolean; createdAt: string; updatedAt: string; }
 export interface PricingRule { id: string; serviceDefinitionId: string; parameterId: string | null; optionId: string | null; quantityParameterId: string | null; name: string; ruleType: PricingRuleType; numericValueMicros: number | null; amountArsMinor: number | null; amountUsdMinor: number | null; sortOrder: number; enabled: boolean; version: number; createdAt: string; updatedAt: string; }
 export interface EconomicProfile { currency: Currency; monthlyIncomeTargetMinor: number | null; monthlyExpensesMinor: number | null; billableHoursMicros: number | null; reserveTaxMicros: number | null; desiredMarginMicros: number | null; defaultUrgencyMicros: number | null; workDays: number | null; vacationWeeks: number | null; manualHourlyRateMinor: number | null; updatedAt: string; }
-export interface MarketSource { id: string; name: string; baseUrl: string | null; sourceType: string; regionsJson: string; supportedServicesJson: string; priority: number; enabled: boolean; usageMode: string; acquisitionMode: "auto_http" | "auto_browser" | "manual" | "disabled"; cooldownHours: number | null; notes: string | null; isSystemSource: boolean; systemKey: string | null; defaultDataJson: string | null; createdAt: string; updatedAt: string; }
+export interface MarketSource {
+  id: string; name: string; baseUrl: string | null; sourceType: string; regionsJson: string;
+  supportedServicesJson: string; priority: number; enabled: boolean; usageMode: string;
+  acquisitionMode: AcquisitionMode; cooldownHours: number | null; notes: string | null;
+  isSystemSource: boolean; systemKey: string | null; defaultDataJson: string | null;
+  purpose: string | null; dataContribution: string | null; appBenefit: string | null;
+  participatesInSuggestions: boolean; automationStatus: AutomationStatus; currentStatus: MarketSourceStatus;
+  adapterKey: string | null; lastRequestAt: string | null; lastSuccessAt: string | null;
+  lastFailureAt: string | null; cooldownUntil: string | null; consecutiveFailures: number;
+  lastHttpStatus: number | null; lastError: string | null; observationCount: number;
+  archivedAt: string | null; createdAt: string; updatedAt: string;
+}
+
+export interface MarketObservation {
+  id: string; sourceId: string; sourceName: string; origin: "AUTO" | "MANUAL";
+  serviceType: string; subservice: string | null; category: string | null; region: string;
+  country: string | null; currency: string; priceType: MarketPriceType; unit: string;
+  priceMinMinor: number | null; priceMaxMinor: number | null; priceValueMinor: number | null;
+  originalValueText: string; convertedValueMinor: number | null; convertedCurrency: string | null;
+  exchangeRateMicros: number | null; exchangeRateDate: string | null; exchangeRateSource: string | null;
+  experienceLevel: string | null; clientTier: string | null; sourceType: string; sourceUrl: string;
+  publishedAt: string | null; retrievedAt: string; parserVersion: string; confidence: string;
+  comparisonEligibility: "ELIGIBLE" | "CONTEXT_ONLY" | "REVIEW_REQUIRED" | "REJECTED" | "POSSIBLE_OUTLIER";
+  exclusionReason: string | null; rawFingerprint: string; evidenceSnippet: string | null;
+  notes: string | null; createdAt: string;
+  snapshotIncluded: boolean | null; snapshotExclusionReason: string | null; snapshotNormalizedValueMinor: number | null;
+}
+
+export interface MarketSnapshot {
+  id: string; quoteId: string | null; quoteServiceId: string | null; queryContextJson: string;
+  currency: Currency; observationCount: number; comparableObservationCount: number; sourceCount: number;
+  minimumFilteredMinor: number | null; p25Minor: number | null; marketMedianMinor: number | null;
+  p75Minor: number | null; maximumFilteredMinor: number | null; confidenceLevel: "HIGH" | "MEDIUM" | "LOW" | "INSUFFICIENT";
+  calculatedPriceMinor: number | null; suggestedPriceMinor: number | null; finalPriceMinorAtCreation: number | null;
+  summaryJson: string; createdAt: string;
+}
+
+export interface MarketOverview { latestSnapshot: MarketSnapshot | null; observations: MarketObservation[]; history: MarketSnapshot[]; }
+export interface MarketResearchJobItem { sourceId: string; sourceName: string; status: MarketSourceStatus | "READY"; message: string | null; observationCount: number; }
+export interface MarketResearchJob { id: string; quoteServiceId: string; status: "RUNNING" | "COMPLETED" | "CANCELLED" | "ERROR"; completed: number; total: number; cancelRequested: boolean; items: MarketResearchJobItem[]; snapshotId: string | null; error: string | null; startedAt: string; finishedAt: string | null; }
+export interface MarketObservationPreview { serviceType: string; subservice: string | null; priceMinMinor: number | null; priceMaxMinor: number | null; priceValueMinor: number | null; currency: string; unit: string; priceType: MarketPriceType; region: string; evidence: string | null; }
+export interface SourceTestResult { sourceId: string; status: MarketSourceStatus; message: string; httpStatus: number | null; observations: MarketObservationPreview[]; }
 export interface PricingConfiguration { definitions: ServiceDefinition[]; parameters: ServiceParameter[]; options: ParameterOption[]; rules: PricingRule[]; economicProfiles: EconomicProfile[]; marketSources: MarketSource[]; }
 
 export interface Bootstrap { clients: Client[]; projects: ProjectSummary[]; presets: Preset[]; settings: AppSettings; pricing: PricingConfiguration; }
@@ -62,7 +107,9 @@ export interface ServiceParameterInput { id?: string; serviceDefinitionId: strin
 export interface ParameterOptionInput { id?: string; parameterId: string; label: string; value: string; sortOrder: number; enabled: boolean; }
 export interface PricingRuleInput { id?: string; serviceDefinitionId: string; parameterId: string | null; optionId: string | null; quantityParameterId: string | null; name: string; ruleType: PricingRuleType; numericValueMicros: number | null; amountArsMinor: number | null; amountUsdMinor: number | null; sortOrder: number; enabled: boolean; }
 export type EconomicProfileInput = Omit<EconomicProfile, "updatedAt">;
-export interface MarketSourceInput { id?: string; name: string; baseUrl?: string; sourceType: string; regionsJson: string; supportedServicesJson: string; priority: number; enabled: boolean; usageMode: string; acquisitionMode: MarketSource["acquisitionMode"]; cooldownHours: number | null; notes?: string; }
+export interface MarketSourceInput { id?: string; name: string; baseUrl?: string; sourceType: string; regionsJson: string; supportedServicesJson: string; priority: number; enabled: boolean; usageMode: string; acquisitionMode: AcquisitionMode; cooldownHours: number | null; notes?: string; purpose?: string; dataContribution?: string; appBenefit?: string; participatesInSuggestions: boolean; }
+export interface ManualObservationInput { sourceId: string; serviceType: string; subservice?: string; category?: string; region: string; country?: string; currency: string; priceType: MarketPriceType; unit: string; priceMinMinor: number | null; priceMaxMinor: number | null; priceValueMinor: number | null; experienceLevel?: string; clientTier?: string; publishedAt?: string; sourceUrl: string; notes?: string; }
+export interface MarketObservationFilter { serviceType?: string; region?: string; sourceId?: string; priceType?: MarketPriceType; currency?: string; query?: string; }
 
 export interface PricingContext { currency: Currency; hourlyRateMinor: number | null; usdToArsMicros: number | null; }
 export interface PriceLine { id?: string; label: string; kind?: "base" | PricingRuleType | "external" | "margin" | "override"; amountMinor: number; detail?: string; }
