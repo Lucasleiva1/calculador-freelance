@@ -1,3 +1,4 @@
+mod classification;
 mod commands;
 mod db;
 mod error;
@@ -55,6 +56,13 @@ pub fn run() {
             commands::get_market_research_job,
             commands::cancel_market_research,
             commands::open_market_source,
+            classification::classify_pricing_engine,
+            classification::classify_market_source,
+            classification::test_ollama,
+            classification::save_pricing_engine,
+            classification::set_pricing_engine_archived,
+            classification::save_engine_source,
+            classification::remove_engine_source,
         ])
         .run(tauri::generate_context!())
         .expect("error al iniciar Pricing OS");

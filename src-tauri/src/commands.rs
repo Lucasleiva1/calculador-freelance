@@ -9,12 +9,13 @@ use crate::{
     error::{command_error, AppError, AppResult},
     models::{
         AppSettings, Bootstrap, Client, ClientInput, CreateProjectInput, EconomicProfile,
-        EconomicProfileInput, ManualObservationInput, MarketObservation, MarketObservationFilter,
-        MarketOverview, MarketResearchJob, MarketSnapshot, MarketSource, MarketSourceInput,
-        ParameterOption, ParameterOptionInput, Preset, PresetInput, PricingConfiguration,
-        PricingRule, PricingRuleInput, ProjectSummary, Quote, QuoteService, SaveServiceInput,
-        ServiceDefinition, ServiceDefinitionInput, ServiceParameter, ServiceParameterInput,
-        SettingsInput, SourceTestResult, Workspace,
+        EconomicProfileInput, EngineCategory, ManualObservationInput, MarketObservation,
+        MarketObservationFilter, MarketOverview, MarketResearchJob, MarketSnapshot, MarketSource,
+        MarketSourceInput, ParameterOption, ParameterOptionInput, Preset, PresetInput,
+        PricingConfiguration, PricingEngine, PricingEngineSource, PricingRule, PricingRuleInput,
+        ProjectSummary, Quote, QuoteService, SaveServiceInput, ServiceDefinition,
+        ServiceDefinitionInput, ServiceParameter, ServiceParameterInput, SettingsInput,
+        SourceTestResult, Workspace,
     },
 };
 
@@ -81,7 +82,8 @@ async fn settings(pool: &SqlitePool) -> AppResult<AppSettings> {
     Ok(sqlx::query_as::<_, AppSettings>(
         "SELECT theme, hourly_rate_ars_minor, hourly_rate_usd_minor, usd_to_ars_micros,
                 active_project_id, suggestions_enabled, suggestion_strategy, base_currency,
-                updated_at FROM app_settings WHERE id = 1",
+                help_mode, local_ai_enabled, ollama_base_url, ollama_model,
+                ai_auto_apply_high_confidence, updated_at FROM app_settings WHERE id = 1",
     )
     .fetch_one(pool)
     .await?)
@@ -143,8 +145,31 @@ async fn pricing_configuration(pool: &SqlitePool) -> AppResult<PricingConfigurat
                 app_benefit, participates_in_suggestions, automation_status, current_status,
                 adapter_key, last_request_at, last_success_at, last_failure_at, cooldown_until,
                 consecutive_failures, last_http_status, last_error, observation_count, archived_at,
-                created_at, updated_at
+                business_source_type, market_country, source_currency, source_updated_at,
+                classification_origin, classification_json, created_at, updated_at
          FROM market_sources WHERE archived_at IS NULL ORDER BY priority, name COLLATE NOCASE",
+    )
+    .fetch_all(pool)
+    .await?;
+    let engine_categories = sqlx::query_as::<_, EngineCategory>(
+        "SELECT id,parent_id,slug,name,engine_type,description,is_system,sort_order,created_at,updated_at
+         FROM engine_categories ORDER BY sort_order,name COLLATE NOCASE",
+    )
+    .fetch_all(pool)
+    .await?;
+    let pricing_engines = sqlx::query_as::<_, PricingEngine>(
+        "SELECT id,engine_key,name,description,engine_type,category_id,calculator_key,
+                service_definition_id,unit_kind,tags_json,status,classification_origin,
+                classification_confidence_micros,classification_explanation,classification_version,
+                is_system,created_at,updated_at,archived_at
+         FROM pricing_engines ORDER BY CASE status WHEN 'active' THEN 0 WHEN 'draft' THEN 1 ELSE 2 END,name COLLATE NOCASE",
+    )
+    .fetch_all(pool)
+    .await?;
+    let engine_sources = sqlx::query_as::<_, PricingEngineSource>(
+        "SELECT engine_id,source_id,role,preference,participates_in_suggestions,
+                match_score_micros,explanation,assigned_by,created_at,updated_at
+         FROM pricing_engine_sources ORDER BY engine_id,preference,source_id",
     )
     .fetch_all(pool)
     .await?;
@@ -155,6 +180,9 @@ async fn pricing_configuration(pool: &SqlitePool) -> AppResult<PricingConfigurat
         rules,
         economic_profiles,
         market_sources,
+        engine_categories,
+        pricing_engines,
+        engine_sources,
     })
 }
 
@@ -372,7 +400,10 @@ pub async fn set_project_archived(
     }.await.map_err(command_error)
 }
 
-fn default_configuration(service_type: &str) -> AppResult<(String, String)> {
+async fn default_configuration(
+    pool: &SqlitePool,
+    service_type: &str,
+) -> AppResult<(String, String)> {
     let (title, value) = match service_type {
         "video-editing" => (
             "Edición de video",
@@ -397,9 +428,43 @@ fn default_configuration(service_type: &str) -> AppResult<(String, String)> {
             }),
         ),
         _ => {
-            return Err(AppError::Validation(
-                "Tipo de servicio no disponible.".into(),
-            ))
+            let engine: (String, String) = sqlx::query_as(
+                "SELECT name,calculator_key FROM pricing_engines WHERE engine_key=? AND status='active' AND archived_at IS NULL",
+            )
+            .bind(service_type)
+            .fetch_optional(pool)
+            .await?
+            .ok_or_else(|| AppError::Validation("El motor no está activo o no existe.".into()))?;
+            let data = match engine.1.as_str() {
+                "physical-product-v1" => serde_json::json!({
+                    "quantity": 1, "costs": [], "wastePercent": 0,
+                    "commissionPercent": 0, "taxPercent": 0,
+                    "recommendedMarginPercent": 30, "premiumMarginPercent": 45,
+                    "selectedTier": "recommended"
+                }),
+                "hybrid-v1" => serde_json::json!({
+                    "quantity": 1, "costs": [], "wastePercent": 0,
+                    "commissionPercent": 0, "taxPercent": 0,
+                    "recommendedMarginPercent": 30, "premiumMarginPercent": 45,
+                    "selectedTier": "recommended", "serviceHours": null,
+                    "serviceLabel": "Trabajo profesional"
+                }),
+                "professional-service-v1" => serde_json::json!({
+                    "parameterValues": {}, "externalCosts": [], "notes": ""
+                }),
+                _ => {
+                    return Err(AppError::Validation(
+                        "Este motor todavía no tiene una calculadora disponible.".into(),
+                    ))
+                }
+            };
+            return Ok((
+                engine.0,
+                serde_json::json!({
+                    "schemaVersion": 1, "serviceType": service_type, "data": data
+                })
+                .to_string(),
+            ));
         }
     };
     Ok((title.into(), value.to_string()))
@@ -412,7 +477,7 @@ pub async fn add_quote_service(
     state: State<'_, AppState>,
 ) -> Result<QuoteService, String> {
     async {
-        let (base_title, configuration) = default_configuration(&service_type)?;
+        let (base_title, configuration) = default_configuration(&state.pool, &service_type).await?;
         let mut tx = state.pool.begin().await?;
         let quote_exists: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM quotes WHERE id = ? AND status = 'draft'")
             .bind(&quote_id).fetch_one(&mut *tx).await?;
@@ -531,14 +596,25 @@ pub async fn update_settings(
         if !matches!(input.suggestion_strategy.as_str(), "competitive" | "balanced" | "premium") {
             return Err(AppError::Validation("Estrategia de sugerencias inválida.".into()));
         }
+        if !matches!(input.help_mode.as_str(), "guided" | "compact" | "off") {
+            return Err(AppError::Validation("Modo de ayuda inválido.".into()));
+        }
+        let ollama_url = input.ollama_base_url.trim().trim_end_matches('/');
+        let parsed_ollama = url::Url::parse(ollama_url)
+            .map_err(|_| AppError::Validation("La dirección de Ollama no es válida.".into()))?;
+        if !matches!(parsed_ollama.host_str().unwrap_or_default(), "127.0.0.1" | "localhost" | "::1") {
+            return Err(AppError::Validation("Ollama debe ejecutarse en este equipo.".into()));
+        }
         validate_currency(&input.base_currency)?;
         validate_non_negative(input.hourly_rate_ars_minor, "La tarifa ARS")?;
         validate_non_negative(input.hourly_rate_usd_minor, "La tarifa USD")?;
         if input.usd_to_ars_micros.is_some_and(|value| value <= 0) { return Err(AppError::Validation("El cambio debe ser mayor que cero.".into())); }
-        sqlx::query("UPDATE app_settings SET theme = ?, hourly_rate_ars_minor = ?, hourly_rate_usd_minor = ?, usd_to_ars_micros = ?, suggestions_enabled = ?, suggestion_strategy = ?, base_currency = ?, updated_at = ? WHERE id = 1")
+        sqlx::query("UPDATE app_settings SET theme = ?, hourly_rate_ars_minor = ?, hourly_rate_usd_minor = ?, usd_to_ars_micros = ?, suggestions_enabled = ?, suggestion_strategy = ?, base_currency = ?, help_mode = ?, local_ai_enabled = ?, ollama_base_url = ?, ollama_model = ?, ai_auto_apply_high_confidence = ?, updated_at = ? WHERE id = 1")
             .bind(input.theme).bind(input.hourly_rate_ars_minor).bind(input.hourly_rate_usd_minor)
             .bind(input.usd_to_ars_micros).bind(input.suggestions_enabled).bind(input.suggestion_strategy)
-            .bind(input.base_currency).bind(now()).execute(&state.pool).await?;
+            .bind(input.base_currency).bind(input.help_mode).bind(input.local_ai_enabled)
+            .bind(ollama_url).bind(clean_optional(input.ollama_model))
+            .bind(input.ai_auto_apply_high_confidence).bind(now()).execute(&state.pool).await?;
         sqlx::query("UPDATE economic_profiles SET manual_hourly_rate_minor = CASE currency WHEN 'ARS' THEN ? ELSE ? END, updated_at = ? WHERE currency IN ('ARS','USD')")
             .bind(input.hourly_rate_ars_minor).bind(input.hourly_rate_usd_minor).bind(now()).execute(&state.pool).await?;
         settings(&state.pool).await
@@ -1033,14 +1109,43 @@ async fn upsert_market_source(pool: &SqlitePool, input: MarketSourceInput) -> Ap
         "READY"
     };
     let participates = input.participates_in_suggestions && input.usage_mode == "market_price";
+    let business_source_type = clean_optional(input.business_source_type)
+        .unwrap_or_else(|| "other".into())
+        .to_lowercase();
+    if business_source_type.len() > 40
+        || !business_source_type
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
+    {
+        return Err(AppError::Validation(
+            "El tipo comercial de fuente no es válido.".into(),
+        ));
+    }
+    let classification_origin =
+        clean_optional(input.classification_origin).unwrap_or_else(|| "manual".into());
+    if !matches!(
+        classification_origin.as_str(),
+        "automatic" | "ai_assisted" | "manual"
+    ) {
+        return Err(AppError::Validation(
+            "El origen de la clasificación no es válido.".into(),
+        ));
+    }
+    let classification_json = clean_optional(input.classification_json);
+    if let Some(value) = classification_json.as_deref() {
+        serde_json::from_str::<serde_json::Value>(value).map_err(|_| {
+            AppError::Validation("La clasificación guardada no es JSON válido.".into())
+        })?;
+    }
     let timestamp = now();
     sqlx::query(
         "INSERT INTO market_sources (id, name, base_url, source_type, regions_json,
          supported_services_json, priority, enabled, usage_mode, acquisition_mode,
          cooldown_hours, notes, is_system_source, purpose, data_contribution, app_benefit,
          participates_in_suggestions, automation_status, current_status, adapter_key,
-         created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
+         business_source_type, market_country, source_currency, source_updated_at,
+         classification_origin, classification_json, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET name=excluded.name, base_url=excluded.base_url,
          source_type=excluded.source_type, regions_json=excluded.regions_json,
          supported_services_json=excluded.supported_services_json, priority=excluded.priority,
@@ -1049,6 +1154,11 @@ async fn upsert_market_source(pool: &SqlitePool, input: MarketSourceInput) -> Ap
          notes=excluded.notes, purpose=excluded.purpose,
          data_contribution=excluded.data_contribution, app_benefit=excluded.app_benefit,
          participates_in_suggestions=excluded.participates_in_suggestions,
+         business_source_type=excluded.business_source_type,
+         market_country=excluded.market_country, source_currency=excluded.source_currency,
+         source_updated_at=excluded.source_updated_at,
+         classification_origin=excluded.classification_origin,
+         classification_json=excluded.classification_json,
          current_status=excluded.current_status, archived_at=NULL,
          updated_at=excluded.updated_at",
     )
@@ -1074,6 +1184,12 @@ async fn upsert_market_source(pool: &SqlitePool, input: MarketSourceInput) -> Ap
         automation_status
     })
     .bind(current_status)
+    .bind(business_source_type)
+    .bind(clean_optional(input.market_country))
+    .bind(clean_optional(input.source_currency).map(|value| value.to_uppercase()))
+    .bind(clean_optional(input.source_updated_at))
+    .bind(classification_origin)
+    .bind(classification_json)
     .bind(&timestamp)
     .bind(&timestamp)
     .execute(pool)
@@ -1350,6 +1466,12 @@ mod tests {
                     data_contribution: Some("Rango, moneda y unidad.".into()),
                     app_benefit: Some("Contrasta el cálculo interno.".into()),
                     participates_in_suggestions: true,
+                    business_source_type: Some("market".into()),
+                    market_country: Some("Argentina".into()),
+                    source_currency: Some("USD".into()),
+                    source_updated_at: None,
+                    classification_origin: Some("automatic".into()),
+                    classification_json: Some(r#"{"confidence":0.8}"#.into()),
                 },
             )
             .await
@@ -1380,6 +1502,12 @@ mod tests {
                     data_contribution: Some("Rango mensual y rol.".into()),
                     app_benefit: Some("Aporta contexto separado.".into()),
                     participates_in_suggestions: true,
+                    business_source_type: Some("market".into()),
+                    market_country: Some("Argentina".into()),
+                    source_currency: Some("USD".into()),
+                    source_updated_at: None,
+                    classification_origin: Some("manual".into()),
+                    classification_json: None,
                 },
             )
             .await

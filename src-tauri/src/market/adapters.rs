@@ -467,6 +467,12 @@ mod tests {
             last_error: None,
             observation_count: 0,
             archived_at: None,
+            business_source_type: "market".into(),
+            market_country: None,
+            source_currency: None,
+            source_updated_at: None,
+            classification_origin: "automatic".into(),
+            classification_json: None,
             created_at: "now".into(),
             updated_at: "now".into(),
         }

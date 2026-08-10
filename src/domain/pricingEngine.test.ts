@@ -11,7 +11,7 @@ const plan = parameter("plan", "plan", "single_select");
 const option: ParameterOption = { id: "premium", parameterId: plan.id, label: "Premium", value: "premium", sortOrder: 1, enabled: true, createdAt: stamp, updatedAt: stamp };
 const rule = (id: string, ruleType: PricingRule["ruleType"], partial: Partial<PricingRule> = {}): PricingRule => ({ id, serviceDefinitionId: definition.id, parameterId: plan.id, optionId: option.id, quantityParameterId: null, name: id, ruleType, numericValueMicros: null, amountArsMinor: null, amountUsdMinor: null, sortOrder: 1, enabled: true, version: 1, createdAt: stamp, updatedAt: stamp, ...partial });
 const profile: EconomicProfile = { currency: "USD", monthlyIncomeTargetMinor: null, monthlyExpensesMinor: null, billableHoursMicros: null, reserveTaxMicros: null, desiredMarginMicros: 200_000, defaultUrgencyMicros: null, workDays: null, vacationWeeks: null, manualHourlyRateMinor: 10_000, updatedAt: stamp };
-const settings: AppSettings = { theme: "warm", hourlyRateArsMinor: null, hourlyRateUsdMinor: 10_000, usdToArsMicros: null, activeProjectId: null, suggestionsEnabled: true, suggestionStrategy: "premium", baseCurrency: "USD", updatedAt: stamp };
+const settings: AppSettings = { theme: "warm", hourlyRateArsMinor: null, hourlyRateUsdMinor: 10_000, usdToArsMicros: null, activeProjectId: null, suggestionsEnabled: true, suggestionStrategy: "premium", baseCurrency: "USD", helpMode: "guided", localAiEnabled: false, ollamaBaseUrl: "http://127.0.0.1:11434", ollamaModel: null, aiAutoApplyHighConfidence: false, updatedAt: stamp };
 const rules: PricingRule[] = [
   rule("fijo", "fixed_amount", { amountUsdMinor: 1_000, sortOrder: 1 }),
   rule("horas", "hours", { numericValueMicros: 1_000_000, sortOrder: 2 }),
@@ -20,7 +20,7 @@ const rules: PricingRule[] = [
   rule("multiplicador", "multiplier", { numericValueMicros: 1_500_000, sortOrder: 5 }),
   rule("tercero", "external_cost", { amountUsdMinor: 500, sortOrder: 6 }),
 ];
-const pricing: PricingConfiguration = { definitions: [definition], parameters: [hours, quantity, plan], options: [option], rules, economicProfiles: [profile], marketSources: [] };
+const pricing: PricingConfiguration = { definitions: [definition], parameters: [hours, quantity, plan], options: [option], rules, economicProfiles: [profile], marketSources: [], engineCategories: [], pricingEngines: [], engineSources: [] };
 const input = { serviceType: "programming" as const, currency: "USD" as const, parameterValues: { estimatedHours: 2, quantity: 3, plan: "premium" }, settings, pricing };
 
 describe("PricingEngine configurable", () => {

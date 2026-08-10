@@ -93,6 +93,22 @@ mod tests {
             assert!(parameters >= 30);
             assert!(sources >= 40);
             assert_eq!(profiles, 2);
+            let categories: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM engine_categories")
+                .fetch_one(&pool)
+                .await
+                .expect("engine categories");
+            let engines: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM pricing_engines")
+                .fetch_one(&pool)
+                .await
+                .expect("pricing engines");
+            let ai_enabled: bool =
+                sqlx::query_scalar("SELECT local_ai_enabled FROM app_settings WHERE id=1")
+                    .fetch_one(&pool)
+                    .await
+                    .expect("local ai setting");
+            assert!(categories >= 10);
+            assert_eq!(engines, 2);
+            assert!(!ai_enabled, "la IA local debe comenzar desactivada");
             let automatic_sources: i64 = sqlx::query_scalar(
                 "SELECT COUNT(*) FROM market_sources WHERE acquisition_mode='auto_http' AND automation_status='APPROVED'",
             )
@@ -145,6 +161,12 @@ mod tests {
                 .expect("migration");
             sqlx::query("UPDATE service_definitions SET balanced_margin_micros=275000, version=version+1 WHERE id='service-programming'")
                 .execute(&pool).await.expect("update");
+            sqlx::query("INSERT INTO pricing_engines (id,engine_key,name,engine_type,category_id,calculator_key,unit_kind,tags_json,status,classification_origin,created_at,updated_at) VALUES ('engine-shirts','venta-remeras','Venta de remeras','product','category-apparel','physical-product-v1','unit','[\"remeras\"]','active','automatic','now','now')")
+                .execute(&pool).await.expect("product engine");
+            for engine_id in ["engine-video-editing", "engine-shirts"] {
+                sqlx::query("INSERT OR REPLACE INTO pricing_engine_sources (engine_id,source_id,role,preference,participates_in_suggestions,match_score_micros,assigned_by,created_at,updated_at) VALUES (?,'source-yunojuno','reference','available',1,800000,'manual','now','now')")
+                    .bind(engine_id).execute(&pool).await.expect("shared source assignment");
+            }
             pool.close().await;
             let reopened = SqlitePoolOptions::new()
                 .max_connections(1)
@@ -154,6 +176,23 @@ mod tests {
             let saved: (Option<i64>, i64) = sqlx::query_as("SELECT balanced_margin_micros, version FROM service_definitions WHERE id='service-programming'")
                 .fetch_one(&reopened).await.expect("saved definition");
             assert_eq!(saved, (Some(275_000), 2));
+            let saved_engine: (String, String) = sqlx::query_as(
+                "SELECT engine_type,calculator_key FROM pricing_engines WHERE id='engine-shirts'",
+            )
+            .fetch_one(&reopened)
+            .await
+            .expect("saved product engine");
+            assert_eq!(
+                saved_engine,
+                ("product".into(), "physical-product-v1".into())
+            );
+            let shared_source_count: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM pricing_engine_sources WHERE source_id='source-yunojuno' AND engine_id IN ('engine-video-editing','engine-shirts')",
+            )
+            .fetch_one(&reopened)
+            .await
+            .expect("shared many-to-many source");
+            assert_eq!(shared_source_count, 2);
             reopened.close().await;
             std::fs::remove_file(path).expect("remove test database");
         });

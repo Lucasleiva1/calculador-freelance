@@ -32,7 +32,9 @@ const SOURCE_COLUMNS: &str =
  system_key, default_data_json, purpose, data_contribution, app_benefit,
  participates_in_suggestions, automation_status, current_status, adapter_key,
  last_request_at, last_success_at, last_failure_at, cooldown_until, consecutive_failures,
- last_http_status, last_error, observation_count, archived_at, created_at, updated_at";
+ last_http_status, last_error, observation_count, archived_at, business_source_type,
+ market_country, source_currency, source_updated_at, classification_origin,
+ classification_json, created_at, updated_at";
 
 const OBSERVATION_COLUMNS: &str =
     "o.id, o.source_id, s.name AS source_name, o.origin, o.service_type,
@@ -62,6 +64,21 @@ async fn source_by_id(pool: &SqlitePool, id: &str) -> AppResult<MarketSource> {
 async fn enabled_sources(pool: &SqlitePool, service_type: &str) -> AppResult<Vec<MarketSource>> {
     let sources = sqlx::query_as::<_, MarketSource>(&format!("SELECT {SOURCE_COLUMNS} FROM market_sources WHERE enabled=1 AND archived_at IS NULL ORDER BY priority, name COLLATE NOCASE"))
         .fetch_all(pool).await?;
+    let assigned: Vec<String> = sqlx::query_scalar(
+        "SELECT pes.source_id FROM pricing_engine_sources pes
+         JOIN pricing_engines pe ON pe.id=pes.engine_id
+         WHERE pe.engine_key=? AND pes.preference<>'excluded'",
+    )
+    .bind(service_type)
+    .fetch_all(pool)
+    .await?;
+    if !assigned.is_empty() {
+        let assigned = assigned.into_iter().collect::<HashSet<_>>();
+        return Ok(sources
+            .into_iter()
+            .filter(|source| assigned.contains(&source.id) || source.usage_mode == "currency")
+            .collect());
+    }
     Ok(sources
         .into_iter()
         .filter(|source| {
@@ -71,6 +88,30 @@ async fn enabled_sources(pool: &SqlitePool, service_type: &str) -> AppResult<Vec
                 .any(|service| service == service_type || service == "all")
                 || source.usage_mode == "currency"
         })
+        .collect())
+}
+
+async fn participating_sources(
+    pool: &SqlitePool,
+    service_type: &str,
+    sources: &[MarketSource],
+) -> AppResult<HashSet<String>> {
+    let assigned: Vec<String> = sqlx::query_scalar(
+        "SELECT pes.source_id FROM pricing_engine_sources pes
+         JOIN pricing_engines pe ON pe.id=pes.engine_id
+         WHERE pe.engine_key=? AND pes.preference<>'excluded'
+           AND pes.participates_in_suggestions=1",
+    )
+    .bind(service_type)
+    .fetch_all(pool)
+    .await?;
+    if !assigned.is_empty() {
+        return Ok(assigned.into_iter().collect());
+    }
+    Ok(sources
+        .iter()
+        .filter(|source| source.participates_in_suggestions)
+        .map(|source| source.id.clone())
         .collect())
 }
 
@@ -140,7 +181,9 @@ async fn persist_draft(
     origin: &str,
 ) -> AppResult<(String, bool)> {
     validate_observation(&mut draft)?;
-    validate_public_https(&draft.source_url)?;
+    if origin != "MANUAL" || !draft.source_url.starts_with("pricing-os://manual/") {
+        validate_public_https(&draft.source_url)?;
+    }
     let hash = fingerprint(&source.id, &draft);
     let id = Uuid::new_v4().to_string();
     let timestamp = now();
@@ -553,7 +596,11 @@ pub async fn create_manual_observation(
     input: ManualObservationInput,
 ) -> AppResult<MarketObservation> {
     let source = source_by_id(&state.pool, &input.source_id).await?;
-    let source_url = validate_public_https(&input.source_url)?.to_string();
+    let source_url = if input.source_url.trim().is_empty() {
+        format!("pricing-os://manual/{}", source.id)
+    } else {
+        validate_public_https(&input.source_url)?.to_string()
+    };
     let original = match (
         input.price_min_minor,
         input.price_max_minor,
@@ -990,11 +1037,8 @@ async fn run_research_inner(state: &AppState, job_id: &str, force: bool) -> AppR
         .iter()
         .map(|source| source.id.clone())
         .collect::<HashSet<_>>();
-    let participating_source_ids = sources
-        .iter()
-        .filter(|source| source.participates_in_suggestions)
-        .map(|source| source.id.clone())
-        .collect::<HashSet<_>>();
+    let participating_source_ids =
+        participating_sources(&state.pool, &service_type, &sources).await?;
     let observations = list_observations(
         state,
         MarketObservationFilter {

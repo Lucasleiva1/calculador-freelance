@@ -92,6 +92,11 @@ pub struct AppSettings {
     pub suggestions_enabled: bool,
     pub suggestion_strategy: String,
     pub base_currency: String,
+    pub help_mode: String,
+    pub local_ai_enabled: bool,
+    pub ollama_base_url: String,
+    pub ollama_model: Option<String>,
+    pub ai_auto_apply_high_confidence: bool,
     pub updated_at: String,
 }
 
@@ -218,8 +223,106 @@ pub struct MarketSource {
     pub last_error: Option<String>,
     pub observation_count: i64,
     pub archived_at: Option<String>,
+    pub business_source_type: String,
+    pub market_country: Option<String>,
+    pub source_currency: Option<String>,
+    pub source_updated_at: Option<String>,
+    pub classification_origin: String,
+    pub classification_json: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
+pub struct EngineCategory {
+    pub id: String,
+    pub parent_id: Option<String>,
+    pub slug: String,
+    pub name: String,
+    pub engine_type: Option<String>,
+    pub description: Option<String>,
+    pub is_system: bool,
+    pub sort_order: i64,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
+pub struct PricingEngine {
+    pub id: String,
+    pub engine_key: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub engine_type: String,
+    pub category_id: Option<String>,
+    pub calculator_key: String,
+    pub service_definition_id: Option<String>,
+    pub unit_kind: String,
+    pub tags_json: String,
+    pub status: String,
+    pub classification_origin: String,
+    pub classification_confidence_micros: Option<i64>,
+    pub classification_explanation: Option<String>,
+    pub classification_version: i64,
+    pub is_system: bool,
+    pub created_at: String,
+    pub updated_at: String,
+    pub archived_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
+pub struct PricingEngineSource {
+    pub engine_id: String,
+    pub source_id: String,
+    pub role: String,
+    pub preference: String,
+    pub participates_in_suggestions: bool,
+    pub match_score_micros: i64,
+    pub explanation: Option<String>,
+    pub assigned_by: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClassificationProposal {
+    pub engine_type: String,
+    pub category_id: Option<String>,
+    pub category_path: Vec<String>,
+    pub calculator_key: String,
+    pub business_activity: String,
+    pub pricing_units: Vec<String>,
+    pub suggested_cost_types: Vec<String>,
+    pub suggested_source_types: Vec<String>,
+    pub tags: Vec<String>,
+    pub confidence: f64,
+    pub explanation: String,
+    pub clarification_question: Option<String>,
+    pub ai_assisted: bool,
+    pub ai_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OllamaModel {
+    pub name: String,
+    pub parameter_size: Option<String>,
+    pub quantization_level: Option<String>,
+    pub size: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OllamaStatus {
+    pub available: bool,
+    pub base_url: String,
+    pub selected_model: Option<String>,
+    pub models: Vec<OllamaModel>,
+    pub message: String,
 }
 
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
@@ -357,6 +460,9 @@ pub struct PricingConfiguration {
     pub rules: Vec<PricingRule>,
     pub economic_profiles: Vec<EconomicProfile>,
     pub market_sources: Vec<MarketSource>,
+    pub engine_categories: Vec<EngineCategory>,
+    pub pricing_engines: Vec<PricingEngine>,
+    pub engine_sources: Vec<PricingEngineSource>,
 }
 
 #[derive(Debug, Serialize)]
@@ -427,6 +533,11 @@ pub struct SettingsInput {
     pub suggestions_enabled: bool,
     pub suggestion_strategy: String,
     pub base_currency: String,
+    pub help_mode: String,
+    pub local_ai_enabled: bool,
+    pub ollama_base_url: String,
+    pub ollama_model: Option<String>,
+    pub ai_auto_apply_high_confidence: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -533,6 +644,75 @@ pub struct MarketSourceInput {
     pub data_contribution: Option<String>,
     pub app_benefit: Option<String>,
     pub participates_in_suggestions: bool,
+    pub business_source_type: Option<String>,
+    pub market_country: Option<String>,
+    pub source_currency: Option<String>,
+    pub source_updated_at: Option<String>,
+    pub classification_origin: Option<String>,
+    pub classification_json: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClassificationInput {
+    pub name: String,
+    pub description: Option<String>,
+    pub deliverable_kind: Option<String>,
+    pub activity_kind: Option<String>,
+    pub pricing_unit: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceClassificationInput {
+    pub name: String,
+    pub base_url: Option<String>,
+    pub purpose: Option<String>,
+    pub data_contribution: Option<String>,
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceClassificationProposal {
+    pub business_source_type: String,
+    pub suggested_engine_types: Vec<String>,
+    pub role: String,
+    pub tags: Vec<String>,
+    pub confidence: f64,
+    pub explanation: String,
+    pub ai_assisted: bool,
+    pub ai_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PricingEngineInput {
+    pub id: Option<String>,
+    pub name: String,
+    pub description: Option<String>,
+    pub engine_type: String,
+    pub category_id: Option<String>,
+    pub calculator_key: String,
+    pub unit_kind: String,
+    pub tags: Vec<String>,
+    pub status: String,
+    pub classification_origin: String,
+    pub classification_confidence: Option<f64>,
+    pub classification_explanation: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EngineSourceInput {
+    pub engine_id: String,
+    pub source_id: String,
+    pub role: String,
+    pub preference: String,
+    pub participates_in_suggestions: bool,
+    pub match_score: f64,
+    pub explanation: Option<String>,
+    pub assigned_by: String,
 }
 
 #[derive(Debug, Deserialize)]

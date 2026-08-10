@@ -20,8 +20,10 @@ import type {
 } from "../domain/types";
 import type { VideoConfiguration } from "../domain/video";
 import type { ProgrammingConfiguration } from "../domain/programming";
+import type { HybridConfiguration, ProductConfiguration } from "../domain/product";
+import { calculateHybrid, calculateProduct } from "../domain/product";
 import { evaluateWorkspace } from "../domain/quote";
-import { createPricingSnapshot, runPricingEngine } from "../domain/pricingEngine";
+import { activeHourlyRate, createPricingSnapshot, runPricingEngine } from "../domain/pricingEngine";
 import { api } from "../services/api";
 import { useAutosave } from "../hooks/useAutosave";
 import { Sidebar, type AppSection } from "../components/Sidebar";
@@ -52,7 +54,7 @@ export function App() {
   const [marketOverview, setMarketOverview] = useState<MarketOverview | null>(null);
   const [marketOverviewServiceId, setMarketOverviewServiceId] = useState<string | null>(null);
   const [marketJob, setMarketJob] = useState<MarketResearchJob | null>(null);
-  const [settingsInitialTab, setSettingsInitialTab] = useState<"general" | "sources">("general");
+  const [settingsInitialTab, setSettingsInitialTab] = useState<"general" | "sources" | "engines">("general");
   const closeAllowed = useRef(false);
   const marketJobRef = useRef<string | null>(null);
 
@@ -103,7 +105,10 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    if (data) document.documentElement.dataset.theme = data.settings.theme;
+    if (data) {
+      document.documentElement.dataset.theme = data.settings.theme;
+      document.documentElement.dataset.help = data.settings.helpMode;
+    }
   }, [data]);
 
   useEffect(() => {
@@ -175,14 +180,32 @@ export function App() {
     const result = runPricingEngine(engineInput);
     const snapshot = createPricingSnapshot(engineInput, result);
     const definition = data.pricing.definitions.find((item) => item.serviceType === service.serviceType);
-    const envelope: ServiceConfigurationEnvelope<ProgrammingConfiguration> = { schemaVersion: 2, serviceType: "programming", data: config };
+    const envelope: ServiceConfigurationEnvelope<ProgrammingConfiguration> = { schemaVersion: 2, serviceType: service.serviceType, data: config };
     queueService(service, { configurationVersion: 2, configurationJson: JSON.stringify(envelope), calculatedSubtotalMinor: result.calculatedSubtotalMinor, suggestedSubtotalMinor: result.suggestedSubtotalMinor, finalSubtotalMinor: result.finalSubtotalMinor, pricingSnapshotJson: snapshot ? JSON.stringify(snapshot) : null, serviceDefinitionVersion: definition?.version ?? null });
+  }
+
+  function genericEngineChange(service: QuoteService, config: ProductConfiguration | HybridConfiguration, immediate = false) {
+    if (!workspace || !data) return;
+    const engine = data.pricing.pricingEngines.find((item) => item.engineKey === service.serviceType);
+    if (!engine) return;
+    const profile = data.pricing.economicProfiles.find((item) => item.currency === workspace.quote.currency) ?? null;
+    const context = { currency: workspace.quote.currency, hourlyRateMinor: activeHourlyRate(profile), usdToArsMicros: data.settings.usdToArsMicros };
+    let result = engine.calculatorKey === "hybrid-v1" ? calculateHybrid(config as HybridConfiguration, context) : calculateProduct(config, context);
+    if (service.hasOverride && service.manualSubtotalMinor != null) result = { ...result, finalSubtotalMinor: service.manualSubtotalMinor, effectiveSubtotalMinor: service.manualSubtotalMinor, hasOverride: true, lines: [...result.lines, { label: "Precio final manual", kind: "override", amountMinor: service.manualSubtotalMinor - (result.suggestedSubtotalMinor ?? result.calculatedSubtotalMinor ?? 0) }] };
+    const envelope: ServiceConfigurationEnvelope<ProductConfiguration | HybridConfiguration> = { schemaVersion: 1, serviceType: service.serviceType, data: config };
+    queueService(service, { configurationJson: JSON.stringify(envelope), calculatedSubtotalMinor: result.calculatedSubtotalMinor, suggestedSubtotalMinor: result.suggestedSubtotalMinor, finalSubtotalMinor: result.finalSubtotalMinor, pricingSnapshotJson: JSON.stringify({ schemaVersion: 1, createdAt: new Date().toISOString(), engineId: engine.id, result }), serviceDefinitionVersion: engine.classificationVersion }, immediate);
   }
 
   function finalPriceChange(service: QuoteService, finalMinor: number | null, reason: string | null) {
     if (service.serviceType === "video-editing") {
       const config = (JSON.parse(service.configurationJson) as ServiceConfigurationEnvelope<VideoConfiguration>).data;
       videoChange(service, config, finalMinor, reason, true);
+      return;
+    }
+    const engine = data?.pricing.pricingEngines.find((item) => item.engineKey === service.serviceType);
+    if (engine && (engine.calculatorKey === "physical-product-v1" || engine.calculatorKey === "hybrid-v1")) {
+      const config = (JSON.parse(service.configurationJson) as ServiceConfigurationEnvelope<ProductConfiguration | HybridConfiguration>).data;
+      genericEngineChange({ ...service, finalSubtotalMinor: finalMinor, manualSubtotalMinor: finalMinor, manualReason: reason, hasOverride: finalMinor != null }, config, true);
       return;
     }
     const config = (JSON.parse(service.configurationJson) as ServiceConfigurationEnvelope<ProgrammingConfiguration>).data;
@@ -250,7 +273,7 @@ export function App() {
 
   async function toggleTheme() {
     if (!data) return;
-    await saveSettings({ theme: data.settings.theme === "warm" ? "dark" : "warm", hourlyRateArsMinor: data.settings.hourlyRateArsMinor, hourlyRateUsdMinor: data.settings.hourlyRateUsdMinor, usdToArsMicros: data.settings.usdToArsMicros, suggestionsEnabled: data.settings.suggestionsEnabled, suggestionStrategy: data.settings.suggestionStrategy, baseCurrency: data.settings.baseCurrency });
+    await saveSettings({ theme: data.settings.theme === "warm" ? "dark" : "warm", hourlyRateArsMinor: data.settings.hourlyRateArsMinor, hourlyRateUsdMinor: data.settings.hourlyRateUsdMinor, usdToArsMicros: data.settings.usdToArsMicros, suggestionsEnabled: data.settings.suggestionsEnabled, suggestionStrategy: data.settings.suggestionStrategy, baseCurrency: data.settings.baseCurrency, helpMode: data.settings.helpMode, localAiEnabled: data.settings.localAiEnabled, ollamaBaseUrl: data.settings.ollamaBaseUrl, ollamaModel: data.settings.ollamaModel, aiAutoApplyHighConfidence: data.settings.aiAutoApplyHighConfidence });
   }
 
   async function changeCurrency(currency: Currency) {
@@ -305,11 +328,11 @@ export function App() {
 
   const activeProject = workspace?.project ?? null;
   let content: React.ReactNode;
-  if (section === "workspace") content = workspace && projectResult ? <WorkspaceView workspace={workspace} settings={data.settings} pricing={data.pricing} result={projectResult} presets={data.presets} statuses={autosave.statuses} errors={autosave.errors} activeServiceId={activeServiceId} onActiveService={setActiveServiceId} onAddService={addService} onVideoChange={videoChange} onProgrammingChange={programmingChange} onFinalPriceChange={finalPriceChange} onTitleChange={(service, title) => queueService(service, { title })} onDeleteService={deleteService} onMoveService={moveService} onRetry={autosave.retry} onSavePreset={savePreset} onUpdatePreset={updatePreset} onDeletePreset={deletePreset} onRestorePreset={restorePreset} market={marketOverviewServiceId === activeServiceId ? marketOverview : null} marketJob={marketJob?.quoteServiceId === activeServiceId ? marketJob : null} onUpdateMarket={updateMarket} onCancelMarket={cancelMarket} /> : <div className="view-page"><EmptyState eyebrow="Pricing OS" title="Creá tu primer proyecto" description="El proyecto organiza cliente, moneda, cotización y servicios en un único workspace." action={<Button variant="accent" onClick={() => setNewProjectOpen(true)}>Nuevo proyecto</Button>} /></div>;
+  if (section === "workspace") content = workspace && projectResult ? <WorkspaceView workspace={workspace} settings={data.settings} pricing={data.pricing} result={projectResult} presets={data.presets} statuses={autosave.statuses} errors={autosave.errors} activeServiceId={activeServiceId} onActiveService={setActiveServiceId} onAddService={addService} onVideoChange={videoChange} onProgrammingChange={programmingChange} onGenericEngineChange={genericEngineChange} onFinalPriceChange={finalPriceChange} onTitleChange={(service, title) => queueService(service, { title })} onDeleteService={deleteService} onMoveService={moveService} onRetry={autosave.retry} onSavePreset={savePreset} onUpdatePreset={updatePreset} onDeletePreset={deletePreset} onRestorePreset={restorePreset} market={marketOverviewServiceId === activeServiceId ? marketOverview : null} marketJob={marketJob?.quoteServiceId === activeServiceId ? marketJob : null} onUpdateMarket={updateMarket} onCancelMarket={cancelMarket} /> : <div className="view-page"><EmptyState eyebrow="Pricing OS" title="Creá tu primer proyecto" description="El proyecto organiza cliente, moneda, cotización y servicios en un único workspace." action={<Button variant="accent" onClick={() => setNewProjectOpen(true)}>Nuevo proyecto</Button>} /></div>;
   else if (section === "clients") content = <ClientsView clients={data.clients} projects={data.projects} onSave={saveClient} onArchive={archiveClient} onOpenProject={openProject} />;
   else if (section === "projects") content = <ProjectsView projects={data.projects} onNew={() => setNewProjectOpen(true)} onOpen={openProject} onArchive={archiveProject} />;
   else if (section === "market") content = <MarketView pricing={data.pricing} activeServiceId={activeServiceId} job={marketJob} onResearch={updateMarket} onCancel={cancelMarket} onConfigureSources={() => { setSettingsInitialTab("sources"); setSection("settings"); }} />;
-  else if (section === "settings" || section === "services") content = <SettingsView key={`${section}-${settingsInitialTab}`} settings={data.settings} pricing={data.pricing} initialTab={section === "services" ? "services" : settingsInitialTab} onSave={saveSettings} onPricingChange={pricingChange} />;
+  else if (section === "settings" || section === "services") content = <SettingsView key={`${section}-${settingsInitialTab}`} settings={data.settings} pricing={data.pricing} initialTab={section === "services" ? "engines" : settingsInitialTab} onSave={saveSettings} onPricingChange={pricingChange} />;
   else content = <FutureView eyebrow="Versionado futuro" title="Historial" description="Las cotizaciones ya tienen versión y estado; el historial comparativo se activará más adelante." icon={Clock3} />;
 
   return <div className="app-shell">

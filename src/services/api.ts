@@ -25,6 +25,15 @@ import type {
   MarketResearchJob,
   MarketSnapshot,
   SourceTestResult,
+  ClassificationInput,
+  ClassificationProposal,
+  SourceClassificationInput,
+  SourceClassificationProposal,
+  PricingEngine,
+  PricingEngineInput,
+  EngineSourceInput,
+  PricingEngineSource,
+  OllamaStatus,
 } from "../domain/types";
 
 export const api = {
@@ -34,7 +43,7 @@ export const api = {
   saveClient: (input: ClientInput) => invoke<Client>("save_client", { input }),
   setClientArchived: (id: string, archived: boolean) => invoke<void>("set_client_archived", { id, archived }),
   setProjectArchived: (id: string, archived: boolean) => invoke<void>("set_project_archived", { id, archived }),
-  addService: (quoteId: string, serviceType: "video-editing" | "programming") =>
+  addService: (quoteId: string, serviceType: string) =>
     invoke<QuoteService>("add_quote_service", { quoteId, serviceType }),
   saveService: (input: SaveServiceInput) => invoke<QuoteService>("save_quote_service", { input }),
   setServiceDeleted: (id: string, deleted: boolean) => invoke<void>("set_service_deleted", { id, deleted }),
@@ -69,4 +78,11 @@ export const api = {
   getMarketResearchJob: (id: string) => invoke<MarketResearchJob>("get_market_research_job", { id }),
   cancelMarketResearch: (id: string) => invoke<MarketResearchJob>("cancel_market_research", { id }),
   openMarketSource: (url: string) => invoke<void>("open_market_source", { url }),
+  classifyPricingEngine: (input: ClassificationInput) => invoke<ClassificationProposal>("classify_pricing_engine", { input }),
+  classifyMarketSource: (input: SourceClassificationInput) => invoke<SourceClassificationProposal>("classify_market_source", { input }),
+  testOllama: () => invoke<OllamaStatus>("test_ollama"),
+  savePricingEngine: (input: PricingEngineInput) => invoke<PricingEngine>("save_pricing_engine", { input }),
+  setPricingEngineArchived: (id: string, archived: boolean) => invoke<PricingEngine>("set_pricing_engine_archived", { id, archived }),
+  saveEngineSource: (input: EngineSourceInput) => invoke<PricingEngineSource>("save_engine_source", { input }),
+  removeEngineSource: (engineId: string, sourceId: string) => invoke<void>("remove_engine_source", { engineId, sourceId }),
 };

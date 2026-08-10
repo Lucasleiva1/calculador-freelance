@@ -1,7 +1,11 @@
 export type Currency = "ARS" | "USD";
 export type Theme = "warm" | "dark";
 export type MarketScope = "argentina" | "international" | "both";
-export type ServiceType = "video-editing" | "programming";
+export type ServiceType = string;
+export type PricingEngineType = "service" | "product" | "hybrid";
+export type CalculatorKey = "professional-service-v1" | "physical-product-v1" | "hybrid-v1" | "unconfigured";
+export type HelpMode = "guided" | "compact" | "off";
+export type ClassificationOrigin = "automatic" | "ai_assisted" | "manual";
 export type SaveStatus = "idle" | "saving" | "saved" | "error";
 export type SuggestionStrategy = "competitive" | "balanced" | "premium";
 export type ParameterType = "single_select" | "multi_select" | "boolean" | "number" | "duration" | "currency" | "percentage" | "text";
@@ -30,7 +34,9 @@ export interface Preset { id: string; serviceType: ServiceType; name: string; or
 export interface AppSettings {
   theme: Theme; hourlyRateArsMinor: number | null; hourlyRateUsdMinor: number | null;
   usdToArsMicros: number | null; activeProjectId: string | null;
-  suggestionsEnabled: boolean; suggestionStrategy: SuggestionStrategy; baseCurrency: Currency; updatedAt: string;
+  suggestionsEnabled: boolean; suggestionStrategy: SuggestionStrategy; baseCurrency: Currency;
+  helpMode: HelpMode; localAiEnabled: boolean; ollamaBaseUrl: string; ollamaModel: string | null;
+  aiAutoApplyHighConfidence: boolean; updatedAt: string;
 }
 
 export interface ServiceDefinition {
@@ -60,8 +66,23 @@ export interface MarketSource {
   adapterKey: string | null; lastRequestAt: string | null; lastSuccessAt: string | null;
   lastFailureAt: string | null; cooldownUntil: string | null; consecutiveFailures: number;
   lastHttpStatus: number | null; lastError: string | null; observationCount: number;
-  archivedAt: string | null; createdAt: string; updatedAt: string;
+  archivedAt: string | null; businessSourceType: string; marketCountry: string | null;
+  sourceCurrency: string | null; sourceUpdatedAt: string | null;
+  classificationOrigin: ClassificationOrigin; classificationJson: string | null;
+  createdAt: string; updatedAt: string;
 }
+
+export interface EngineCategory { id: string; parentId: string | null; slug: string; name: string; engineType: PricingEngineType | null; description: string | null; isSystem: boolean; sortOrder: number; createdAt: string; updatedAt: string; }
+export interface PricingEngine { id: string; engineKey: string; name: string; description: string | null; engineType: PricingEngineType; categoryId: string | null; calculatorKey: CalculatorKey; serviceDefinitionId: string | null; unitKind: string; tagsJson: string; status: "draft" | "active" | "archived"; classificationOrigin: ClassificationOrigin; classificationConfidenceMicros: number | null; classificationExplanation: string | null; classificationVersion: number; isSystem: boolean; createdAt: string; updatedAt: string; archivedAt: string | null; }
+export interface PricingEngineSource { engineId: string; sourceId: string; role: "reference" | "cost_input" | "context"; preference: "preferred" | "available" | "excluded"; participatesInSuggestions: boolean; matchScoreMicros: number; explanation: string | null; assignedBy: ClassificationOrigin; createdAt: string; updatedAt: string; }
+export interface ClassificationInput { name: string; description?: string; deliverableKind?: "physical" | "digital" | "both" | "unknown"; activityKind?: "sale" | "service" | "both" | "unknown"; pricingUnit?: string; }
+export interface ClassificationProposal { engineType: PricingEngineType; categoryId: string | null; categoryPath: string[]; calculatorKey: Exclude<CalculatorKey, "unconfigured">; businessActivity: string; pricingUnits: string[]; suggestedCostTypes: string[]; suggestedSourceTypes: string[]; tags: string[]; confidence: number; explanation: string; clarificationQuestion: string | null; aiAssisted: boolean; aiError: string | null; }
+export interface SourceClassificationInput { name: string; baseUrl?: string; purpose?: string; dataContribution?: string; notes?: string; }
+export interface SourceClassificationProposal { businessSourceType: string; suggestedEngineTypes: PricingEngineType[]; role: PricingEngineSource["role"]; tags: string[]; confidence: number; explanation: string; aiAssisted: boolean; aiError: string | null; }
+export interface PricingEngineInput { id?: string; name: string; description?: string; engineType: PricingEngineType; categoryId: string | null; calculatorKey: CalculatorKey; unitKind: string; tags: string[]; status: "draft" | "active" | "archived"; classificationOrigin: ClassificationOrigin; classificationConfidence: number | null; classificationExplanation?: string; }
+export interface EngineSourceInput { engineId: string; sourceId: string; role: PricingEngineSource["role"]; preference: PricingEngineSource["preference"]; participatesInSuggestions: boolean; matchScore: number; explanation?: string; assignedBy: ClassificationOrigin; }
+export interface OllamaModel { name: string; parameterSize: string | null; quantizationLevel: string | null; size: number | null; }
+export interface OllamaStatus { available: boolean; baseUrl: string; selectedModel: string | null; models: OllamaModel[]; message: string; }
 
 export interface MarketObservation {
   id: string; sourceId: string; sourceName: string; origin: "AUTO" | "MANUAL";
@@ -92,13 +113,13 @@ export interface MarketResearchJobItem { sourceId: string; sourceName: string; s
 export interface MarketResearchJob { id: string; quoteServiceId: string; status: "RUNNING" | "COMPLETED" | "CANCELLED" | "ERROR"; completed: number; total: number; cancelRequested: boolean; items: MarketResearchJobItem[]; snapshotId: string | null; error: string | null; startedAt: string; finishedAt: string | null; }
 export interface MarketObservationPreview { serviceType: string; subservice: string | null; priceMinMinor: number | null; priceMaxMinor: number | null; priceValueMinor: number | null; currency: string; unit: string; priceType: MarketPriceType; region: string; evidence: string | null; }
 export interface SourceTestResult { sourceId: string; status: MarketSourceStatus; message: string; httpStatus: number | null; observations: MarketObservationPreview[]; }
-export interface PricingConfiguration { definitions: ServiceDefinition[]; parameters: ServiceParameter[]; options: ParameterOption[]; rules: PricingRule[]; economicProfiles: EconomicProfile[]; marketSources: MarketSource[]; }
+export interface PricingConfiguration { definitions: ServiceDefinition[]; parameters: ServiceParameter[]; options: ParameterOption[]; rules: PricingRule[]; economicProfiles: EconomicProfile[]; marketSources: MarketSource[]; engineCategories: EngineCategory[]; pricingEngines: PricingEngine[]; engineSources: PricingEngineSource[]; }
 
 export interface Bootstrap { clients: Client[]; projects: ProjectSummary[]; presets: Preset[]; settings: AppSettings; pricing: PricingConfiguration; }
 export interface Workspace { project: ProjectSummary; quote: Quote; services: QuoteService[]; }
 export interface ClientInput { id?: string; name: string; company?: string; email?: string; whatsapp?: string; country?: string; notes?: string; }
 export interface CreateProjectInput { name: string; clientId?: string; newClient?: ClientInput; currency: Currency; marketScope: MarketScope; }
-export interface SettingsInput { theme: Theme; hourlyRateArsMinor: number | null; hourlyRateUsdMinor: number | null; usdToArsMicros: number | null; suggestionsEnabled: boolean; suggestionStrategy: SuggestionStrategy; baseCurrency: Currency; }
+export interface SettingsInput { theme: Theme; hourlyRateArsMinor: number | null; hourlyRateUsdMinor: number | null; usdToArsMicros: number | null; suggestionsEnabled: boolean; suggestionStrategy: SuggestionStrategy; baseCurrency: Currency; helpMode: HelpMode; localAiEnabled: boolean; ollamaBaseUrl: string; ollamaModel: string | null; aiAutoApplyHighConfidence: boolean; }
 export interface SaveServiceInput { id: string; title: string; configurationVersion: number; configurationJson: string; calculatedSubtotalMinor: number | null; suggestedSubtotalMinor: number | null; finalSubtotalMinor: number | null; hasOverride: boolean; manualSubtotalMinor: number | null; manualReason: string | null; pricingSnapshotJson: string | null; serviceDefinitionVersion: number | null; expectedRevision: number; }
 export interface PresetInput { id?: string; serviceType: ServiceType; name: string; configurationVersion: number; definitionVersion?: number; configurationJson: string; }
 
@@ -107,7 +128,7 @@ export interface ServiceParameterInput { id?: string; serviceDefinitionId: strin
 export interface ParameterOptionInput { id?: string; parameterId: string; label: string; value: string; sortOrder: number; enabled: boolean; }
 export interface PricingRuleInput { id?: string; serviceDefinitionId: string; parameterId: string | null; optionId: string | null; quantityParameterId: string | null; name: string; ruleType: PricingRuleType; numericValueMicros: number | null; amountArsMinor: number | null; amountUsdMinor: number | null; sortOrder: number; enabled: boolean; }
 export type EconomicProfileInput = Omit<EconomicProfile, "updatedAt">;
-export interface MarketSourceInput { id?: string; name: string; baseUrl?: string; sourceType: string; regionsJson: string; supportedServicesJson: string; priority: number; enabled: boolean; usageMode: string; acquisitionMode: AcquisitionMode; cooldownHours: number | null; notes?: string; purpose?: string; dataContribution?: string; appBenefit?: string; participatesInSuggestions: boolean; }
+export interface MarketSourceInput { id?: string; name: string; baseUrl?: string; sourceType: string; regionsJson: string; supportedServicesJson: string; priority: number; enabled: boolean; usageMode: string; acquisitionMode: AcquisitionMode; cooldownHours: number | null; notes?: string; purpose?: string; dataContribution?: string; appBenefit?: string; participatesInSuggestions: boolean; businessSourceType?: string; marketCountry?: string; sourceCurrency?: string; sourceUpdatedAt?: string; classificationOrigin?: ClassificationOrigin; classificationJson?: string; }
 export interface ManualObservationInput { sourceId: string; serviceType: string; subservice?: string; category?: string; region: string; country?: string; currency: string; priceType: MarketPriceType; unit: string; priceMinMinor: number | null; priceMaxMinor: number | null; priceValueMinor: number | null; experienceLevel?: string; clientTier?: string; publishedAt?: string; sourceUrl: string; notes?: string; }
 export interface MarketObservationFilter { serviceType?: string; region?: string; sourceId?: string; priceType?: MarketPriceType; currency?: string; query?: string; }
 
@@ -119,7 +140,13 @@ export interface ServiceResult {
   finalSubtotalMinor: number | null; effectiveSubtotalMinor: number | null; hasOverride: boolean;
   hours: number | null; externalCostsMinor: number; effectiveHourlyMinor: number | null;
   appliedMarginMicros: number | null; lines: PriceLine[]; issues: string[];
+  engineKind?: PricingEngineType;
+  pricingTiers?: ProductPricingTiers;
+  productMetrics?: ProductMetrics;
 }
+export interface ProductPriceTier { unitMinor: number; totalMinor: number; marginMicros: number; }
+export interface ProductPricingTiers { floor: ProductPriceTier; recommended: ProductPriceTier; premium: ProductPriceTier; selected: "floor" | "recommended" | "premium"; }
+export interface ProductMetrics { quantity: number; costUnitMinor: number; productionCostMinor: number; revenueMinor: number; grossProfitMinor: number; marginMicros: number; markupMicros: number; sellingFeesMinor: number; }
 export interface PricingSnapshot { schemaVersion: 1; createdAt: string; currency: Currency; serviceType: ServiceType; definition: ServiceDefinition; parameters: ServiceParameter[]; options: ParameterOption[]; rules: PricingRule[]; economicProfile: EconomicProfile | null; settings: Pick<AppSettings, "suggestionsEnabled" | "suggestionStrategy" | "usdToArsMicros">; parameterValues: Record<string, unknown>; result: ServiceResult; }
 export interface ServiceConfigurationEnvelope<T> { schemaVersion: number; serviceType: ServiceType; data: T; }
 export interface ServiceModuleDefinition<T> { type: ServiceType; label: string; schemaVersion: number; createDefaultConfiguration: () => T; validate: (configuration: T) => string[]; calculate: (configuration: T, context: PricingContext, manualSubtotalMinor?: number | null) => ServiceResult; summarize: (configuration: T) => string[]; }
