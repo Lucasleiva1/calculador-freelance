@@ -857,16 +857,7 @@ mod tests {
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
     use std::str::FromStr;
 
-    async fn seeded_pool() -> SqlitePool {
-        let options = SqliteConnectOptions::from_str("sqlite::memory:")
-            .expect("options")
-            .create_if_missing(true)
-            .foreign_keys(true);
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect_with(options)
-            .await
-            .expect("pool");
+    async fn seed_pool(pool: SqlitePool) -> SqlitePool {
         sqlx::migrate!("./migrations")
             .run(&pool)
             .await
@@ -880,6 +871,19 @@ mod tests {
         sqlx::query("INSERT INTO quote_services (id,quote_id,service_type,title,sort_order,configuration_version,configuration_json,calculated_subtotal_minor,suggested_subtotal_minor,final_subtotal_minor,has_override,row_revision,created_at,updated_at) VALUES ('service-test','quote-test','video-editing','Video',0,1,'{}',90000,120000,120000,0,0,'now','now')")
             .execute(&pool).await.expect("service");
         pool
+    }
+
+    async fn seeded_pool() -> SqlitePool {
+        let options = SqliteConnectOptions::from_str("sqlite::memory:")
+            .expect("options")
+            .create_if_missing(true)
+            .foreign_keys(true);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await
+            .expect("pool");
+        seed_pool(pool).await
     }
 
     fn input(recommended: i64) -> SaveQuoteSnapshotInput {
@@ -920,6 +924,12 @@ mod tests {
                 .await
                 .expect("old detail");
             assert!(first.snapshot_json.contains("120000"));
+            let tamper = sqlx::query(
+                "UPDATE quote_snapshots SET recommended_total_minor=1 WHERE quote_id='quote-test' AND revision=1",
+            )
+            .execute(&pool)
+            .await;
+            assert!(tamper.is_err(), "un snapshot existente nunca se modifica");
         });
     }
 
@@ -979,6 +989,60 @@ mod tests {
             .await
             .expect("original value");
             assert_eq!(original, Some(999_999));
+        });
+    }
+
+    #[test]
+    fn saved_quote_history_persists_after_reopening_database() {
+        tauri::async_runtime::block_on(async {
+            let path =
+                std::env::temp_dir().join(format!("pricing-os-history-{}.sqlite3", Uuid::new_v4()));
+            let connection = format!("sqlite://{}", path.to_string_lossy().replace('\\', "/"));
+            let options = SqliteConnectOptions::from_str(&connection)
+                .expect("options")
+                .create_if_missing(true)
+                .foreign_keys(true);
+            let pool = SqlitePoolOptions::new()
+                .max_connections(1)
+                .connect_with(options.clone())
+                .await
+                .expect("first connection");
+            let pool = seed_pool(pool).await;
+            save_snapshot_in_pool(&pool, input(120_000))
+                .await
+                .expect("saved snapshot");
+            pool.close().await;
+
+            let reopened = SqlitePoolOptions::new()
+                .max_connections(1)
+                .connect_with(options)
+                .await
+                .expect("second connection");
+            let detail = get_detail_from_pool(&reopened, "quote-test", None)
+                .await
+                .expect("persisted snapshot");
+            assert_eq!(detail.quote.snapshot_revision, 1);
+            assert_eq!(detail.quote.recommended_total_minor, Some(120_000));
+            assert!(detail.snapshot_json.contains("Alcance original"));
+            reopened.close().await;
+            let mut remove_error = None;
+            for attempt in 0..5 {
+                match std::fs::remove_file(&path) {
+                    Ok(()) => {
+                        remove_error = None;
+                        break;
+                    }
+                    Err(error) => {
+                        remove_error = Some(error);
+                        if attempt < 4 {
+                            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+                        }
+                    }
+                }
+            }
+            if let Some(error) = remove_error {
+                panic!("remove test database: {error}");
+            }
         });
     }
 }

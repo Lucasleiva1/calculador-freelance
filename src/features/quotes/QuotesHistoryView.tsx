@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Archive, ArrowRight, CalendarDays, Copy, FileClock, Filter, Pencil, RefreshCw, RotateCcw, Search, Trash2, X } from "lucide-react";
 import { formatMoney, minorToInput, majorToMinor } from "../../domain/money";
 import { filterQuoteHistory, parseQuoteSnapshot, quoteStatusLabels, type QuoteHistoryFilters } from "../../domain/quoteHistory";
-import type { Client, PricingConfiguration, QuoteHistoryDetail, QuoteHistoryItem, QuotePriceKind, QuoteStatus, Workspace } from "../../domain/types";
+import type { Client, Currency, PricingConfiguration, QuoteHistoryDetail, QuoteHistoryItem, QuotePriceKind, QuoteSnapshotService, QuoteStatus, Workspace } from "../../domain/types";
 import { api } from "../../services/api";
 import { Button, EmptyState, Field, Input, Select, StatusDot } from "../../components/ui";
 
@@ -10,6 +10,48 @@ const initialFilters: QuoteHistoryFilters = { query: "", status: "all", serviceT
 
 function formatDate(value: string) {
   return new Intl.DateTimeFormat("es-AR", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
+}
+
+function recordText(value: Record<string, unknown>, key: string) {
+  const item = value[key];
+  return typeof item === "string" && item.trim() ? item : null;
+}
+
+function recordMinor(value: Record<string, unknown>, key: string) {
+  const item = value[key];
+  return typeof item === "number" && Number.isFinite(item) ? item : null;
+}
+
+function recordCurrency(value: Record<string, unknown>, fallback: Currency): Currency {
+  const item = recordText(value, "currency");
+  return item === "ARS" || item === "USD" ? item : fallback;
+}
+
+function observationAmount(observation: Record<string, unknown>, fallbackCurrency: Currency) {
+  const currency = recordCurrency(observation, fallbackCurrency);
+  const value = recordMinor(observation, "valueMinor");
+  const minimum = recordMinor(observation, "minimumMinor");
+  const maximum = recordMinor(observation, "maximumMinor");
+  if (value != null) return formatMoney(value, currency);
+  if (minimum != null && maximum != null) return `${formatMoney(minimum, currency)} — ${formatMoney(maximum, currency)}`;
+  if (minimum != null) return `Desde ${formatMoney(minimum, currency)}`;
+  if (maximum != null) return `Hasta ${formatMoney(maximum, currency)}`;
+  return "Importe no registrado";
+}
+
+function SnapshotSources({ sources, currency }: { sources: QuoteSnapshotService["sources"]; currency: Currency }) {
+  const market = sources.marketSnapshot;
+  const marketCurrency = market ? recordCurrency(market, currency) : currency;
+  const median = market ? recordMinor(market, "medianMinor") : null;
+  const p25 = market ? recordMinor(market, "p25Minor") : null;
+  const p75 = market ? recordMinor(market, "p75Minor") : null;
+  if (sources.assigned.length === 0 && !market && sources.observations.length === 0) return <div className="snapshot-sources"><small>Sin fuentes asignadas en este corte.</small></div>;
+  return <div className="snapshot-sources">
+    {sources.assigned.length > 0 && <div className="snapshot-sources__heading">Fuentes asignadas al guardar</div>}
+    {sources.assigned.map((source) => <div key={source.id} className="snapshot-source"><strong>{source.name}</strong><span>{source.contribution || source.role}</span><small>{[source.sourceType, source.country, source.currency, source.updatedAt ? `actualizada ${source.updatedAt}` : null].filter(Boolean).join(" · ")}</small>{source.url && <a href={source.url} target="_blank" rel="noreferrer">Abrir URL registrada</a>}</div>)}
+    {market && <div className="snapshot-market"><span>Referencia de mercado registrada</span><div><b>{median == null ? "Sin mediana" : formatMoney(median, marketCurrency)}</b><small>{[p25 != null ? `P25 ${formatMoney(p25, marketCurrency)}` : null, p75 != null ? `P75 ${formatMoney(p75, marketCurrency)}` : null, recordText(market, "confidence")].filter(Boolean).join(" · ")}</small></div></div>}
+    {sources.observations.length > 0 && <div className="snapshot-observations"><span>Observaciones usadas o descartadas en la referencia</span>{sources.observations.map((observation, index) => <div key={`${recordText(observation, "sourceId") ?? "source"}-${index}`}><strong>{recordText(observation, "sourceName") ?? `Fuente ${index + 1}`}</strong><b>{observationAmount(observation, currency)}</b><small>{[recordText(observation, "priceType"), recordText(observation, "unit"), recordText(observation, "publishedAt") ?? recordText(observation, "retrievedAt"), observation.included === false ? "descartada" : "incluida"].filter(Boolean).join(" · ")}</small></div>)}</div>}
+  </div>;
 }
 
 function Detail({ detail, clients, onClose, onReload, onOpenProject, onDuplicated }: {
@@ -21,6 +63,8 @@ function Detail({ detail, clients, onClose, onReload, onOpenProject, onDuplicate
   const snapshot = parseQuoteSnapshot(detail.snapshotJson);
   const historicalRevision = detail.displayedRevision !== detail.quote.snapshotRevision;
   const currency = snapshot?.quote.currency ?? detail.quote.currency;
+  const snapshotProjectName = snapshot?.project.name ?? detail.quote.projectName;
+  const snapshotClientName = snapshot?.client.name ?? detail.quote.clientName;
   const displayedSelectedMinor = historicalRevision ? snapshot?.totals.selectedMinor ?? null : detail.quote.selectedPriceMinor;
   const displayedSelectedKind = historicalRevision ? snapshot?.quote.selectedPriceKind ?? detail.quote.selectedPriceKind : detail.quote.selectedPriceKind;
   const priceKindLabel: Record<QuotePriceKind, string> = { floor: "Piso", recommended: "Recomendado", premium: "Premium", custom: "Personalizado" };
@@ -67,15 +111,16 @@ function Detail({ detail, clients, onClose, onReload, onOpenProject, onDuplicate
   }
 
   return <aside className="quote-detail" aria-label="Detalle histórico de cotización">
-    <header className="quote-detail__header"><div><span className="eyebrow">Snapshot histórico</span><h2>{detail.quote.projectName}</h2><p>{detail.quote.clientName} · {currency}</p></div><button className="icon-button" aria-label="Cerrar detalle" onClick={onClose}><X size={19} /></button></header>
+    <header className="quote-detail__header"><div><span className="eyebrow">Snapshot histórico · Rev. {detail.displayedRevision}</span><h2>{snapshotProjectName}</h2><p>{snapshotClientName} · {currency} · {formatDate(detail.snapshotCreatedAt)}</p></div><button className="icon-button" aria-label="Cerrar detalle" onClick={onClose}><X size={19} /></button></header>
     <div className="quote-detail__toolbar"><Select aria-label="Revisión histórica" value={detail.displayedRevision} onChange={(event) => void onReload(detail.quote.id, Number(event.target.value))}>{detail.revisions.map((revision) => <option key={revision.revision} value={revision.revision}>Revisión {revision.revision} · {formatDate(revision.createdAt)}</option>)}</Select><span className={`quote-status quote-status--${detail.quote.status}`}><StatusDot tone={detail.quote.status === "rejected" ? "danger" : detail.quote.status === "archived" ? "muted" : "accent"} />{quoteStatusLabels[detail.quote.status]}</span></div>
     <div className="quote-detail__scroll">
       {historicalRevision && <p className="historical-warning"><FileClock size={16} />Estás viendo una revisión anterior e inmutable.</p>}
       {editing ? <section className="quote-admin-form"><span className="eyebrow">Datos administrativos</span><Field label="Proyecto" hint="Cambiar este nombre no recalcula los importes históricos."><Input value={projectName} onChange={(event) => setProjectName(event.target.value)} /></Field><Field label="Cliente" hint="Asocia la cotización a otro cliente existente; el snapshot visto conserva el cliente de aquella fecha."><Select value={clientId} onChange={(event) => setClientId(event.target.value)}>{clients.filter((client) => client.status === "active").map((client) => <option key={client.id} value={client.id}>{client.name}</option>)}</Select></Field><Field label="Estado" hint="Sirve para seguir el ciclo comercial sin convertir Pricing OS en un CRM."><Select value={status} onChange={(event) => setStatus(event.target.value as QuoteStatus)}>{Object.entries(quoteStatusLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</Select></Field><Field label="Notas" hint="Alcance y condiciones administrativas actuales."><textarea className="input textarea" rows={3} value={notes} onChange={(event) => setNotes(event.target.value)} /></Field><Field label="Precio seleccionado" hint="Podés cambiar la decisión final sin alterar piso, recomendado ni premium."><Select value={kind} onChange={(event) => setKind(event.target.value as QuotePriceKind)}><option value="floor">Piso</option><option value="recommended">Recomendado</option><option value="premium">Premium</option><option value="custom">Personalizado</option></Select></Field>{kind === "custom" && <Field label={`Importe (${detail.quote.currency})`}><Input inputMode="decimal" value={custom} onChange={(event) => setCustom(event.target.value)} /></Field>}<div className="quote-admin-form__actions"><Button onClick={() => setEditing(false)}>Cancelar</Button><Button variant="accent" onClick={() => void saveAdmin()} disabled={busy}>Guardar datos</Button></div></section> : <>
         <section className="quote-detail__prices"><div><span>Piso</span><strong>{formatMoney(snapshot?.totals.floorMinor, currency)}</strong></div><div className="is-featured"><span>Recomendado</span><strong>{formatMoney(snapshot?.totals.recommendedMinor, currency)}</strong></div><div><span>Premium</span><strong>{formatMoney(snapshot?.totals.premiumMinor, currency)}</strong></div><div className="is-selected"><span>Precio seleccionado</span><strong>{formatMoney(displayedSelectedMinor, currency)}</strong><small>{priceKindLabel[displayedSelectedKind]}</small></div></section>
         <section className="quote-detail__metrics"><div><span>Horas estimadas</span><b>{snapshot ? (snapshot.totals.totalHoursMicros / 1_000_000).toLocaleString("es-AR") : "—"} h</b></div><div><span>Costos externos</span><b>{formatMoney(snapshot?.totals.externalCostsMinor, currency)}</b></div><div><span>Valor efectivo / h</span><b>{formatMoney(snapshot?.totals.effectiveHourlyMinor, currency)}</b></div><div><span>Margen registrado</span><b>{snapshot?.totals.marginMicros == null ? "—" : `${(snapshot.totals.marginMicros / 10_000).toLocaleString("es-AR")}%`}</b></div></section>
-        {snapshot?.quote.notes && <section className="quote-detail__notes"><span className="eyebrow">Notas</span><p>{snapshot.quote.notes}</p></section>}
-        <section className="quote-detail__services"><span className="eyebrow">Módulos congelados</span>{snapshot?.services.map((service, index) => <article key={service.id}><header><span>{String(index + 1).padStart(2, "0")}</span><div><strong>{service.title}</strong><small>{service.serviceType}</small></div><b>{formatMoney(service.finalSubtotalMinor, currency)}</b></header><div className="snapshot-service__facts"><span>Calculado <b>{formatMoney(service.calculatedSubtotalMinor, currency)}</b></span><span>Sugerido <b>{formatMoney(service.suggestedSubtotalMinor, currency)}</b></span>{service.hasOverride && <span>Override <b>{formatMoney(service.manualSubtotalMinor, currency)}</b></span>}</div>{service.manualReason && <p>{service.manualReason}</p>}<details><summary>Parámetros y fuentes</summary><pre>{JSON.stringify(service.configuration, null, 2)}</pre><div className="snapshot-sources">{service.sources.assigned.length === 0 ? <small>Sin fuentes asignadas en este corte.</small> : service.sources.assigned.map((source) => <div key={source.id}><strong>{source.name}</strong><span>{source.contribution || source.role}</span>{source.url && <small>{source.url}</small>}</div>)}</div></details></article>) ?? <p>No se pudo leer el snapshot.</p>}</section>
+        {snapshot?.quote.notes && <section className="quote-detail__notes"><span className="eyebrow">Notas al guardar</span><p>{snapshot.quote.notes}</p></section>}
+        {detail.quote.notes && detail.quote.notes !== snapshot?.quote.notes && <section className="quote-detail__notes"><span className="eyebrow">Notas administrativas actuales</span><p>{detail.quote.notes}</p></section>}
+        <section className="quote-detail__services"><span className="eyebrow">Módulos congelados</span>{snapshot?.services.map((service, index) => <article key={service.id}><header><span>{String(index + 1).padStart(2, "0")}</span><div><strong>{service.title}</strong><small>{service.serviceType}</small></div><b>{formatMoney(service.finalSubtotalMinor, currency)}</b></header><div className="snapshot-service__facts"><span>Calculado <b>{formatMoney(service.calculatedSubtotalMinor, currency)}</b></span><span>Sugerido <b>{formatMoney(service.suggestedSubtotalMinor, currency)}</b></span>{service.hasOverride && <span>Override <b>{formatMoney(service.manualSubtotalMinor, currency)}</b></span>}</div>{service.manualReason && <p>{service.manualReason}</p>}<details><summary>Parámetros y fuentes</summary><pre>{JSON.stringify(service.configuration, null, 2)}</pre><SnapshotSources sources={service.sources} currency={currency} /></details></article>) ?? <p>No se pudo leer el snapshot.</p>}</section>
       </>}
       {error && <p className="form-error" role="alert">{error}</p>}
     </div>
