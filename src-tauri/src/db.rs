@@ -115,7 +115,17 @@ mod tests {
             .fetch_one(&pool)
             .await
             .expect("automatic sources");
-            assert_eq!(automatic_sources, 3);
+            // El catálogo sólo automatiza BCRA para la conversión USD/ARS. Las
+            // demás referencias requieren carga manual verificable para no
+            // simular una fuente de precios ni infringir sus condiciones.
+            assert_eq!(automatic_sources, 1);
+            let automatic_key: String = sqlx::query_scalar(
+                "SELECT system_key FROM market_sources WHERE acquisition_mode='auto_http' AND automation_status='APPROVED'",
+            )
+            .fetch_one(&pool)
+            .await
+            .expect("BCRA automatic source");
+            assert_eq!(automatic_key, "bcra");
             let (upwork_url, upwork_status, upwork_automation): (String, String, String) =
                 sqlx::query_as("SELECT base_url, current_status, automation_status FROM market_sources WHERE system_key='upwork'")
                     .fetch_one(&pool).await.expect("upwork");

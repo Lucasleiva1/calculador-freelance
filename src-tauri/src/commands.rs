@@ -30,6 +30,13 @@ fn clean_optional(value: Option<String>) -> Option<String> {
     })
 }
 
+fn source_type_supports_suggestions(source_type: &str) -> bool {
+    !matches!(
+        source_type,
+        "salary" | "job_board" | "methodology" | "currency"
+    )
+}
+
 fn validate_currency(currency: &str) -> AppResult<()> {
     if matches!(currency, "ARS" | "USD") {
         Ok(())
@@ -1111,7 +1118,9 @@ async fn upsert_market_source(pool: &SqlitePool, input: MarketSourceInput) -> Ap
     } else {
         "READY"
     };
-    let participates = input.participates_in_suggestions && input.usage_mode == "market_price";
+    let participates = input.participates_in_suggestions
+        && input.usage_mode == "market_price"
+        && source_type_supports_suggestions(&input.source_type);
     let business_source_type = clean_optional(input.business_source_type)
         .unwrap_or_else(|| "other".into())
         .to_lowercase();
@@ -1165,7 +1174,7 @@ async fn upsert_market_source(pool: &SqlitePool, input: MarketSourceInput) -> Ap
          current_status=excluded.current_status, archived_at=NULL,
          updated_at=excluded.updated_at",
     )
-    .bind(id)
+    .bind(&id)
     .bind(input.name.trim())
     .bind(base_url)
     .bind(input.source_type)
@@ -1197,6 +1206,20 @@ async fn upsert_market_source(pool: &SqlitePool, input: MarketSourceInput) -> Ap
     .bind(&timestamp)
     .execute(pool)
     .await?;
+    // Una asignación previa nunca puede dejar a una fuente de contexto dentro
+    // del conjunto que calcula sugerencias, aunque haya sido editada antes de
+    // que existiera esta validación.
+    if !participates {
+        sqlx::query(
+            "UPDATE pricing_engine_sources
+             SET participates_in_suggestions=0, updated_at=?
+             WHERE source_id=?",
+        )
+        .bind(&timestamp)
+        .bind(&id)
+        .execute(pool)
+        .await?;
+    }
     Ok(())
 }
 
@@ -1256,8 +1279,24 @@ pub async fn restore_market_source(
         let acquisition = value.get("acquisitionMode").and_then(Value::as_str).unwrap_or("manual");
         let default_automation = value.get("automationStatus").and_then(Value::as_str).unwrap_or("MANUAL_ONLY");
         let status = if default_automation == "BLOCKED" { "BLOCKED" } else if !enabled { "DISABLED" } else if acquisition == "manual" { "MANUAL" } else { "READY" };
-        sqlx::query("UPDATE market_sources SET name=COALESCE(json_extract(default_data_json,'$.name'),name), base_url=json_extract(default_data_json,'$.baseUrl'), source_type=COALESCE(json_extract(default_data_json,'$.sourceType'),source_type), regions_json=COALESCE(json_extract(default_data_json,'$.regionsJson'),regions_json), supported_services_json=COALESCE(json_extract(default_data_json,'$.supportedServicesJson'),supported_services_json), enabled=?, priority=?, usage_mode=COALESCE(json_extract(default_data_json,'$.usageMode'),usage_mode), acquisition_mode=?, cooldown_hours=COALESCE(json_extract(default_data_json,'$.cooldownHours'),cooldown_hours), purpose=json_extract(default_data_json,'$.purpose'), data_contribution=json_extract(default_data_json,'$.dataContribution'), app_benefit=json_extract(default_data_json,'$.appBenefit'), participates_in_suggestions=COALESCE(json_extract(default_data_json,'$.participatesInSuggestions'),0), automation_status=COALESCE(json_extract(default_data_json,'$.automationStatus'),'MANUAL_ONLY'), adapter_key=json_extract(default_data_json,'$.adapterKey'), current_status=?, archived_at=NULL, last_error=json_extract(default_data_json,'$.lastError'), consecutive_failures=0, updated_at=? WHERE id=?")
-            .bind(enabled).bind(priority).bind(acquisition).bind(status).bind(now()).bind(id).execute(&state.pool).await?;
+        sqlx::query("UPDATE market_sources SET name=COALESCE(json_extract(default_data_json,'$.name'),name), base_url=json_extract(default_data_json,'$.baseUrl'), source_type=COALESCE(json_extract(default_data_json,'$.sourceType'),source_type), regions_json=COALESCE(json_extract(default_data_json,'$.regionsJson'),regions_json), supported_services_json=COALESCE(json_extract(default_data_json,'$.supportedServicesJson'),supported_services_json), enabled=?, priority=?, usage_mode=COALESCE(json_extract(default_data_json,'$.usageMode'),usage_mode), acquisition_mode=?, cooldown_hours=COALESCE(json_extract(default_data_json,'$.cooldownHours'),cooldown_hours), purpose=json_extract(default_data_json,'$.purpose'), data_contribution=json_extract(default_data_json,'$.dataContribution'), app_benefit=json_extract(default_data_json,'$.appBenefit'), participates_in_suggestions=COALESCE(json_extract(default_data_json,'$.participatesInSuggestions'),0), automation_status=COALESCE(json_extract(default_data_json,'$.automationStatus'),'MANUAL_ONLY'), adapter_key=json_extract(default_data_json,'$.adapterKey'), business_source_type=COALESCE(json_extract(default_data_json,'$.businessSourceType'),'market'), market_country=json_extract(default_data_json,'$.marketCountry'), source_currency=json_extract(default_data_json,'$.sourceCurrency'), current_status=?, archived_at=NULL, last_error=json_extract(default_data_json,'$.lastError'), consecutive_failures=0, updated_at=? WHERE id=?")
+            .bind(enabled).bind(priority).bind(acquisition).bind(status).bind(now()).bind(&id).execute(&state.pool).await?;
+        sqlx::query(
+            "UPDATE pricing_engine_sources
+             SET participates_in_suggestions=0, updated_at=?
+             WHERE source_id=? AND (
+               role<>'reference' OR EXISTS(
+                 SELECT 1 FROM market_sources ms
+                 WHERE ms.id=pricing_engine_sources.source_id
+                   AND (ms.usage_mode<>'market_price'
+                     OR ms.source_type IN ('salary','job_board','methodology','currency'))
+               )
+             )",
+        )
+        .bind(now())
+        .bind(&id)
+        .execute(&state.pool)
+        .await?;
         pricing_configuration(&state.pool).await
     }.await.map_err(command_error)
 }
@@ -1283,8 +1322,11 @@ pub async fn restore_market_sources_catalog(
              data_contribution=json_extract(default_data_json,'$.dataContribution'),
              app_benefit=json_extract(default_data_json,'$.appBenefit'),
              participates_in_suggestions=COALESCE(json_extract(default_data_json,'$.participatesInSuggestions'),0),
-             automation_status=COALESCE(json_extract(default_data_json,'$.automationStatus'),'MANUAL_ONLY'),
-             adapter_key=json_extract(default_data_json,'$.adapterKey'),
+              automation_status=COALESCE(json_extract(default_data_json,'$.automationStatus'),'MANUAL_ONLY'),
+              adapter_key=json_extract(default_data_json,'$.adapterKey'),
+              business_source_type=COALESCE(json_extract(default_data_json,'$.businessSourceType'),'market'),
+              market_country=json_extract(default_data_json,'$.marketCountry'),
+              source_currency=json_extract(default_data_json,'$.sourceCurrency'),
              current_status=CASE
                WHEN COALESCE(json_extract(default_data_json,'$.automationStatus'),'MANUAL_ONLY')='BLOCKED' THEN 'BLOCKED'
                WHEN COALESCE(json_extract(default_data_json,'$.enabled'),0)=0 THEN 'DISABLED'
@@ -1292,6 +1334,19 @@ pub async fn restore_market_sources_catalog(
                ELSE 'READY' END,
              archived_at=NULL, last_error=json_extract(default_data_json,'$.lastError'), consecutive_failures=0, updated_at=?
              WHERE is_system_source=1",
+        )
+         .bind(now())
+         .execute(&state.pool)
+         .await?;
+        sqlx::query(
+            "UPDATE pricing_engine_sources
+             SET participates_in_suggestions=0, updated_at=?
+             WHERE role<>'reference' OR EXISTS(
+               SELECT 1 FROM market_sources ms
+               WHERE ms.id=pricing_engine_sources.source_id
+                 AND (ms.usage_mode<>'market_price'
+                   OR ms.source_type IN ('salary','job_board','methodology','currency'))
+             )",
         )
         .bind(now())
         .execute(&state.pool)

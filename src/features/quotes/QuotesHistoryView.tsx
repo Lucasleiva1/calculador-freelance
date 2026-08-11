@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
-import { Archive, ArrowRight, CalendarDays, Copy, FileClock, Filter, Pencil, RefreshCw, RotateCcw, Search, Trash2, X } from "lucide-react";
+import { Archive, ArrowRight, CalendarDays, Copy, FileClock, FileText, Filter, Pencil, RefreshCw, RotateCcw, Search, Trash2, X } from "lucide-react";
 import { formatMoney, minorToInput, majorToMinor } from "../../domain/money";
 import { filterQuoteHistory, parseQuoteSnapshot, quoteStatusLabels, type QuoteHistoryFilters } from "../../domain/quoteHistory";
 import type { Client, Currency, PricingConfiguration, QuoteHistoryDetail, QuoteHistoryItem, QuotePriceKind, QuoteSnapshotService, QuoteStatus, Workspace } from "../../domain/types";
 import { api } from "../../services/api";
 import { Button, EmptyState, Field, Input, Select, StatusDot } from "../../components/ui";
+import { ClientDocumentModal } from "./ClientDocumentModal";
 
 const initialFilters: QuoteHistoryFilters = { query: "", status: "all", serviceType: "all", currency: "all", sort: "recent" };
 
@@ -77,6 +78,7 @@ function Detail({ detail, clients, onClose, onReload, onOpenProject, onDuplicate
   const [custom, setCustom] = useState(minorToInput(detail.quote.selectedPriceKind === "custom" ? detail.quote.selectedPriceMinor : null));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [documentOpen, setDocumentOpen] = useState(false);
 
   async function saveAdmin() {
     setBusy(true); setError("");
@@ -124,7 +126,8 @@ function Detail({ detail, clients, onClose, onReload, onOpenProject, onDuplicate
       </>}
       {error && <p className="form-error" role="alert">{error}</p>}
     </div>
-    <footer className="quote-detail__actions"><Button onClick={() => setEditing(!editing)}><Pencil size={15} /> Editar datos</Button><Button onClick={() => void duplicate()} disabled={busy}><Copy size={15} /> Usar como base</Button><Button onClick={() => { if (window.confirm("Abrir el cálculo permite modificar el borrador vivo. Los snapshots anteriores seguirán intactos y sólo se actualizará el historial cuando guardes una nueva revisión. ¿Abrir?")) void onOpenProject(detail.quote.projectId); }}><ArrowRight size={15} /> Editar cálculo</Button>{detail.quote.status === "archived" ? <><Button onClick={() => void changeArchive(false)}><RotateCcw size={15} /> Restaurar</Button><Button variant="danger" onClick={() => void permanentDelete()}><Trash2 size={15} /> Eliminar</Button></> : <Button onClick={() => void changeArchive(true)}><Archive size={15} /> Archivar</Button>}</footer>
+    <footer className="quote-detail__actions"><Button onClick={() => setEditing(!editing)}><Pencil size={15} /> Editar datos</Button><Button onClick={() => setDocumentOpen(true)} disabled={busy || displayedSelectedMinor == null}><FileText size={15} /> Preparar PDF</Button><Button onClick={() => void duplicate()} disabled={busy}><Copy size={15} /> Usar como base</Button><Button onClick={() => { if (window.confirm("Abrir el cálculo permite modificar el borrador vivo. Los snapshots anteriores seguirán intactos y sólo se actualizará el historial cuando guardes una nueva revisión. ¿Abrir?")) void onOpenProject(detail.quote.projectId); }}><ArrowRight size={15} /> Editar cálculo</Button>{detail.quote.status === "archived" ? <><Button onClick={() => void changeArchive(false)}><RotateCcw size={15} /> Restaurar</Button><Button variant="danger" onClick={() => void permanentDelete()}><Trash2 size={15} /> Eliminar</Button></> : <Button onClick={() => void changeArchive(true)}><Archive size={15} /> Archivar</Button>}</footer>
+    {documentOpen && <ClientDocumentModal quoteId={detail.quote.id} snapshotRevision={detail.displayedRevision} services={(snapshot?.services ?? []).map((service) => ({ id: service.id, title: service.title }))} onClose={() => setDocumentOpen(false)} />}
   </aside>;
 }
 

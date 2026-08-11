@@ -3,7 +3,7 @@ use std::{collections::HashSet, process::Command, time::Instant};
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use reqwest::Client;
 use serde_json::{json, Value};
-use sqlx::{Row, SqlitePool};
+use sqlx::{Row, Sqlite, SqlitePool, Transaction};
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
@@ -12,8 +12,8 @@ use crate::{
     error::{AppError, AppResult},
     models::{
         ManualObservationInput, MarketObservation, MarketObservationFilter,
-        MarketObservationPreview, MarketOverview, MarketResearchJob, MarketResearchJobItem,
-        MarketSnapshot, MarketSource, SourceTestResult,
+        MarketObservationPreview, MarketOverview, MarketResearchBaseline, MarketResearchJob,
+        MarketResearchJobItem, MarketSnapshot, MarketSource, SourceTestResult,
     },
 };
 
@@ -99,8 +99,14 @@ async fn participating_sources(
     let assigned: Vec<String> = sqlx::query_scalar(
         "SELECT pes.source_id FROM pricing_engine_sources pes
          JOIN pricing_engines pe ON pe.id=pes.engine_id
+         JOIN market_sources ms ON ms.id=pes.source_id
          WHERE pe.engine_key=? AND pes.preference<>'excluded'
-           AND pes.participates_in_suggestions=1",
+           AND pes.role='reference'
+           AND pes.participates_in_suggestions=1
+           AND ms.enabled=1 AND ms.archived_at IS NULL
+           AND ms.usage_mode='market_price'
+           AND ms.source_type NOT IN ('salary','job_board','methodology','currency')
+           AND ms.participates_in_suggestions=1",
     )
     .bind(service_type)
     .fetch_all(pool)
@@ -110,9 +116,23 @@ async fn participating_sources(
     }
     Ok(sources
         .iter()
-        .filter(|source| source.participates_in_suggestions)
+        .filter(|source| source_supports_suggestions(source))
         .map(|source| source.id.clone())
         .collect())
+}
+
+fn source_supports_suggestions(source: &MarketSource) -> bool {
+    source.enabled
+        && source.participates_in_suggestions
+        && source_kind_supports_suggestions(&source.usage_mode, &source.source_type)
+}
+
+fn source_kind_supports_suggestions(usage_mode: &str, source_type: &str) -> bool {
+    usage_mode == "market_price"
+        && !matches!(
+            source_type,
+            "salary" | "job_board" | "methodology" | "currency"
+        )
 }
 
 fn regions(source: &MarketSource) -> Vec<String> {
@@ -279,20 +299,6 @@ async fn process_source(
     force: bool,
     persist: bool,
 ) -> AppResult<SourceTestResult> {
-    let url = source
-        .base_url
-        .as_deref()
-        .ok_or_else(|| AppError::Validation("La fuente no tiene URL base.".into()))?;
-    validate_public_https(url)?;
-    if source.acquisition_mode == "manual" {
-        return Ok(preview(
-            &source.id,
-            "MANUAL",
-            "Fuente manual: abrila y agregá una observación trazable.".into(),
-            None,
-            vec![],
-        ));
-    }
     if source.acquisition_mode == "disabled" || !source.enabled {
         return Ok(preview(
             &source.id,
@@ -302,6 +308,19 @@ async fn process_source(
             vec![],
         ));
     }
+    if source.acquisition_mode == "manual" {
+        let message = if source_supports_suggestions(source) {
+            "Fuente manual: cargá evidencia verificada para que pueda participar como referencia."
+        } else {
+            "Fuente de contexto manual: no se consulta automáticamente ni genera sugerencias de precio."
+        };
+        return Ok(preview(&source.id, "MANUAL", message.into(), None, vec![]));
+    }
+    let url = source
+        .base_url
+        .as_deref()
+        .ok_or_else(|| AppError::Validation("La fuente no tiene URL base.".into()))?;
+    validate_public_https(url)?;
     if source.acquisition_mode == "auto_browser" {
         return Ok(preview(
             &source.id,
@@ -699,7 +718,7 @@ pub async fn list_snapshots(
     state: &AppState,
     quote_service_id: Option<&str>,
 ) -> AppResult<Vec<MarketSnapshot>> {
-    let sql = "SELECT id, quote_id, quote_service_id, query_context_json, currency, observation_count, comparable_observation_count, source_count, minimum_filtered_minor, p25_minor, market_median_minor, p75_minor, maximum_filtered_minor, confidence_level, calculated_price_minor, suggested_price_minor, final_price_minor_at_creation, summary_json, created_at FROM market_snapshots";
+    let sql = "SELECT id, quote_id, quote_service_id, query_context_json, currency, observation_count, comparable_observation_count, source_count, minimum_filtered_minor, p25_minor, market_median_minor, p75_minor, maximum_filtered_minor, confidence_level, calculated_price_minor, suggested_price_minor, final_price_minor_at_creation, base_service_revision, suggestion_update_status, suggestion_update_message, summary_json, created_at FROM market_snapshots";
     if let Some(id) = quote_service_id {
         Ok(sqlx::query_as::<_, MarketSnapshot>(&format!(
             "{sql} WHERE quote_service_id=? ORDER BY created_at DESC"
@@ -862,6 +881,45 @@ async fn update_job(state: &AppState, id: &str, update: impl FnOnce(&mut MarketR
     }
 }
 
+/// Persiste una sugerencia solamente si el borrador sigue siendo exactamente el
+/// que inició la investigación. No incrementa `row_revision`: una referencia de
+/// mercado no es una edición del usuario y un autosave local posterior debe poder
+/// reemplazar una sugerencia que ya quedó desactualizada.
+async fn apply_market_suggestion_if_current(
+    tx: &mut Transaction<'_, Sqlite>,
+    job: &MarketResearchJob,
+    suggestion: i64,
+    timestamp: &str,
+) -> AppResult<bool> {
+    let baseline = &job.baseline;
+    let updated = sqlx::query(
+        "UPDATE quote_services
+         SET suggested_subtotal_minor=?, updated_at=?
+         WHERE id=? AND row_revision=? AND configuration_json=?
+           AND final_subtotal_minor IS ? AND has_override=?
+           AND deleted_at IS NULL",
+    )
+    .bind(suggestion)
+    .bind(timestamp)
+    .bind(&job.quote_service_id)
+    .bind(job.base_service_revision)
+    .bind(&baseline.configuration_json)
+    .bind(baseline.final_price_minor)
+    .bind(baseline.has_override)
+    .execute(&mut **tx)
+    .await?
+    .rows_affected()
+        == 1;
+    if updated {
+        sqlx::query("UPDATE quotes SET updated_at=? WHERE id=?")
+            .bind(timestamp)
+            .bind(&baseline.quote_id)
+            .execute(&mut **tx)
+            .await?;
+    }
+    Ok(updated)
+}
+
 pub async fn start_job_record(
     state: &AppState,
     quote_service_id: &str,
@@ -877,18 +935,36 @@ pub async fn start_job_record(
             "Ya hay una actualización de mercado en curso. Evitamos consultas duplicadas.".into(),
         ));
     }
-    let service_type: String = sqlx::query_scalar(
-        "SELECT service_type FROM quote_services WHERE id=? AND deleted_at IS NULL",
+    let row = sqlx::query(
+        "SELECT qs.quote_id, qs.service_type, qs.configuration_json,
+                qs.calculated_subtotal_minor, qs.final_subtotal_minor, qs.has_override,
+                qs.row_revision, q.currency, p.market_scope
+         FROM quote_services qs
+         JOIN quotes q ON q.id=qs.quote_id
+         JOIN projects p ON p.id=q.project_id
+         WHERE qs.id=? AND qs.deleted_at IS NULL",
     )
     .bind(quote_service_id)
     .fetch_optional(&state.pool)
     .await?
     .ok_or(AppError::NotFound)?;
-    let sources = enabled_sources(&state.pool, &service_type).await?;
+    let baseline = MarketResearchBaseline {
+        quote_id: row.try_get("quote_id")?,
+        service_type: row.try_get("service_type")?,
+        configuration_json: row.try_get("configuration_json")?,
+        calculated_price_minor: row.try_get("calculated_subtotal_minor")?,
+        final_price_minor: row.try_get("final_subtotal_minor")?,
+        has_override: row.try_get("has_override")?,
+        currency: row.try_get("currency")?,
+        market_scope: row.try_get("market_scope")?,
+    };
+    let base_service_revision: i64 = row.try_get("row_revision")?;
+    let sources = enabled_sources(&state.pool, &baseline.service_type).await?;
     let id = Uuid::new_v4().to_string();
     let job = MarketResearchJob {
         id: id.clone(),
         quote_service_id: quote_service_id.into(),
+        base_service_revision,
         status: "RUNNING".into(),
         completed: 0,
         total: sources.len() as i64,
@@ -904,9 +980,12 @@ pub async fn start_job_record(
             })
             .collect(),
         snapshot_id: None,
+        suggestion_update_status: "PENDING".into(),
+        suggestion_update_message: None,
         error: None,
         started_at: now(),
         finished_at: None,
+        baseline,
     };
     state.market_jobs.lock().await.insert(id, job.clone());
     Ok(job)
@@ -942,18 +1021,18 @@ pub async fn run_research_job(state: AppState, job_id: String, force: bool) {
 
 async fn run_research_inner(state: &AppState, job_id: &str, force: bool) -> AppResult<()> {
     let job = get_job(state, job_id).await?;
-    let row = sqlx::query("SELECT qs.quote_id, qs.service_type, qs.configuration_json, qs.calculated_subtotal_minor, qs.final_subtotal_minor, qs.has_override, q.currency, p.market_scope FROM quote_services qs JOIN quotes q ON q.id=qs.quote_id JOIN projects p ON p.id=q.project_id WHERE qs.id=?")
-        .bind(&job.quote_service_id).fetch_one(&state.pool).await?;
-    let quote_id: String = row.try_get("quote_id")?;
-    let service_type: String = row.try_get("service_type")?;
-    let configuration_json: String = row.try_get("configuration_json")?;
-    let calculated: Option<i64> = row.try_get("calculated_subtotal_minor")?;
-    let final_price: Option<i64> = row.try_get("final_subtotal_minor")?;
-    let has_override: bool = row.try_get("has_override")?;
-    let currency: String = row.try_get("currency")?;
-    let market_scope: Option<String> = row.try_get("market_scope")?;
-    let context = query_context(&service_type, &configuration_json, market_scope.as_deref());
-    let sources = enabled_sources(&state.pool, &service_type).await?;
+    let baseline = &job.baseline;
+    let quote_id = &baseline.quote_id;
+    let service_type = &baseline.service_type;
+    let calculated = baseline.calculated_price_minor;
+    let final_price = baseline.final_price_minor;
+    let currency = &baseline.currency;
+    let context = query_context(
+        service_type,
+        &baseline.configuration_json,
+        baseline.market_scope.as_deref(),
+    );
+    let sources = enabled_sources(&state.pool, service_type).await?;
     for source in &sources {
         if get_job(state, job_id).await?.cancel_requested {
             update_job(state, job_id, |job| {
@@ -1038,7 +1117,7 @@ async fn run_research_inner(state: &AppState, job_id: &str, force: bool) -> AppR
         .map(|source| source.id.clone())
         .collect::<HashSet<_>>();
     let participating_source_ids =
-        participating_sources(&state.pool, &service_type, &sources).await?;
+        participating_sources(&state.pool, service_type, &sources).await?;
     let observations = list_observations(
         state,
         MarketObservationFilter {
@@ -1066,13 +1145,18 @@ async fn run_research_inner(state: &AppState, job_id: &str, force: bool) -> AppR
     } else {
         (None, None, None)
     };
-    let (compared, summary) = compare_market(
+    let (compared, mut summary) = compare_market(
         &observations,
         &context,
-        &currency,
+        currency,
         rate,
         &participating_source_ids,
     );
+    if participating_source_ids.is_empty() {
+        summary.explanations.push(
+            "No hay fuentes de precio de mercado verificadas para sugerir. Las de moneda, salarios y metodología quedan sólo como contexto.".into(),
+        );
+    }
     let settings =
         sqlx::query("SELECT suggestions_enabled, suggestion_strategy FROM app_settings WHERE id=1")
             .fetch_one(&state.pool)
@@ -1095,19 +1179,47 @@ async fn run_research_inner(state: &AppState, job_id: &str, force: bool) -> AppR
     }).to_string();
     let timestamp = now();
     let mut tx = state.pool.begin().await?;
-    sqlx::query("INSERT INTO market_snapshots (id, quote_id, quote_service_id, query_context_json, currency, observation_count, comparable_observation_count, source_count, minimum_filtered_minor, p25_minor, market_median_minor, p75_minor, maximum_filtered_minor, confidence_level, calculated_price_minor, suggested_price_minor, final_price_minor_at_creation, summary_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+    let (suggestion_update_status, suggestion_update_message) = if !suggestions_enabled {
+        (
+            "DISABLED",
+            Some(
+                "Las sugerencias de mercado estan desactivadas; se guardo solo la evidencia."
+                    .to_string(),
+            ),
+        )
+    } else if let Some(market_suggestion) = suggested {
+        if apply_market_suggestion_if_current(&mut tx, &job, market_suggestion, &timestamp).await? {
+            (
+                "APPLIED",
+                Some("Se actualizo solo el precio sugerido. El alcance y el precio final no cambiaron.".to_string()),
+            )
+        } else {
+            (
+                "SKIPPED_DRAFT_CHANGED",
+                Some("La cotizacion cambio mientras se investigaba. Se guardo la evidencia, sin modificar tus parametros ni tu precio final.".to_string()),
+            )
+        }
+    } else {
+        (
+            "INSUFFICIENT",
+            Some("No hay referencias comparables suficientes para proponer un precio. Se guardo la evidencia disponible.".to_string()),
+        )
+    };
+    sqlx::query("INSERT INTO market_snapshots (id, quote_id, quote_service_id, query_context_json, currency, observation_count, comparable_observation_count, source_count, minimum_filtered_minor, p25_minor, market_median_minor, p75_minor, maximum_filtered_minor, confidence_level, calculated_price_minor, suggested_price_minor, final_price_minor_at_creation, base_service_revision, suggestion_update_status, suggestion_update_message, summary_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
         .bind(&snapshot_id).bind(&quote_id).bind(&job.quote_service_id).bind(serde_json::to_string(&context)?)
         .bind(&currency).bind(observations.len() as i64).bind(summary.comparable_count).bind(summary.source_count)
         .bind(summary.minimum_filtered_minor).bind(summary.p25_minor).bind(summary.median_minor).bind(summary.p75_minor).bind(summary.maximum_filtered_minor)
-        .bind(&summary.confidence_level).bind(calculated).bind(suggested).bind(final_price).bind(&summary_json).bind(&timestamp)
+        .bind(&summary.confidence_level).bind(calculated).bind(suggested).bind(final_price)
+        .bind(job.base_service_revision).bind(suggestion_update_status).bind(&suggestion_update_message)
+        .bind(&summary_json).bind(&timestamp)
         .execute(&mut *tx).await?;
     for item in &compared {
         let observation = observations
             .iter()
             .find(|observation| observation.id == item.observation_id)
             .ok_or_else(|| AppError::Validation("Observación de snapshot inexistente.".into()))?;
-        let cross_currency = observation.currency != currency;
-        let converted = converted_midpoint(observation, &currency, rate);
+        let cross_currency = observation.currency != currency.as_str();
+        let converted = converted_midpoint(observation, currency, rate);
         sqlx::query("INSERT INTO market_snapshot_observations (snapshot_id, observation_id, included, exclusion_reason, normalized_value_minor, converted_value_minor, converted_currency, exchange_rate_micros, exchange_rate_date, exchange_rate_source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
             .bind(&snapshot_id).bind(&item.observation_id).bind(item.included).bind(&item.reason)
             .bind(item.normalized_value_minor).bind(cross_currency.then_some(converted).flatten())
@@ -1116,53 +1228,12 @@ async fn run_research_inner(state: &AppState, job_id: &str, force: bool) -> AppR
             .bind(cross_currency.then_some(rate_source.as_deref()).flatten())
             .execute(&mut *tx).await?;
     }
-    if suggestions_enabled {
-        if let Some(market_suggestion) = suggested {
-            let mut pricing_snapshot: Option<String> =
-                sqlx::query_scalar("SELECT pricing_snapshot_json FROM quote_services WHERE id=?")
-                    .bind(&job.quote_service_id)
-                    .fetch_one(&mut *tx)
-                    .await?;
-            if let Some(raw) = pricing_snapshot.take() {
-                if let Ok(mut json) = serde_json::from_str::<Value>(&raw) {
-                    if let Some(slot) = json.pointer_mut("/result/suggestedSubtotalMinor") {
-                        *slot = Value::from(market_suggestion);
-                    }
-                    if let Some(slot) = json.pointer_mut("/result/finalSubtotalMinor") {
-                        *slot = final_price.map(Value::from).unwrap_or(Value::Null);
-                    }
-                    sqlx::query("UPDATE quote_services SET suggested_subtotal_minor=?, pricing_snapshot_json=?, updated_at=? WHERE id=?")
-                        .bind(market_suggestion).bind(json.to_string()).bind(&timestamp).bind(&job.quote_service_id).execute(&mut *tx).await?;
-                } else {
-                    sqlx::query("UPDATE quote_services SET suggested_subtotal_minor=?, updated_at=? WHERE id=?").bind(market_suggestion).bind(&timestamp).bind(&job.quote_service_id).execute(&mut *tx).await?;
-                }
-            } else {
-                sqlx::query(
-                    "UPDATE quote_services SET suggested_subtotal_minor=?, updated_at=? WHERE id=?",
-                )
-                .bind(market_suggestion)
-                .bind(&timestamp)
-                .bind(&job.quote_service_id)
-                .execute(&mut *tx)
-                .await?;
-            }
-        }
-    }
-    // El precio final y su override nunca se actualizan durante investigación de mercado.
-    let protected_final: (Option<i64>, bool) =
-        sqlx::query_as("SELECT final_subtotal_minor, has_override FROM quote_services WHERE id=?")
-            .bind(&job.quote_service_id)
-            .fetch_one(&mut *tx)
-            .await?;
-    if protected_final != (final_price, has_override) {
-        return Err(AppError::Validation(
-            "La protección del precio final detectó una mutación inesperada.".into(),
-        ));
-    }
     tx.commit().await?;
     update_job(state, job_id, |job| {
         job.status = "COMPLETED".into();
         job.snapshot_id = Some(snapshot_id);
+        job.suggestion_update_status = suggestion_update_status.into();
+        job.suggestion_update_message = suggestion_update_message;
         job.finished_at = Some(now());
         if live_result_count == 0 && live_failure_count > 0 {
             job.error = Some(
@@ -1191,6 +1262,66 @@ pub fn open_source(raw_url: &str) -> AppResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+    use std::str::FromStr;
+
+    async fn suggestion_test_pool() -> SqlitePool {
+        let options = SqliteConnectOptions::from_str("sqlite::memory:")
+            .expect("valid sqlite options")
+            .create_if_missing(true);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await
+            .expect("pool");
+        sqlx::query("CREATE TABLE quotes (id TEXT PRIMARY KEY, updated_at TEXT NOT NULL)")
+            .execute(&pool)
+            .await
+            .expect("quotes table");
+        sqlx::query("INSERT INTO quotes (id,updated_at) VALUES ('quote','before')")
+            .execute(&pool)
+            .await
+            .expect("quote");
+        sqlx::query("CREATE TABLE quote_services (id TEXT PRIMARY KEY, suggested_subtotal_minor INTEGER, final_subtotal_minor INTEGER, has_override INTEGER NOT NULL, row_revision INTEGER NOT NULL, configuration_json TEXT NOT NULL, deleted_at TEXT, updated_at TEXT NOT NULL)")
+            .execute(&pool)
+            .await
+            .expect("services table");
+        pool
+    }
+
+    fn market_job(
+        revision: i64,
+        configuration: &str,
+        final_price: Option<i64>,
+        has_override: bool,
+    ) -> MarketResearchJob {
+        MarketResearchJob {
+            id: "job".into(),
+            quote_service_id: "service".into(),
+            base_service_revision: revision,
+            status: "RUNNING".into(),
+            completed: 0,
+            total: 0,
+            cancel_requested: false,
+            items: vec![],
+            snapshot_id: None,
+            suggestion_update_status: "PENDING".into(),
+            suggestion_update_message: None,
+            error: None,
+            started_at: "before".into(),
+            finished_at: None,
+            baseline: MarketResearchBaseline {
+                quote_id: "quote".into(),
+                service_type: "video-editing".into(),
+                configuration_json: configuration.into(),
+                calculated_price_minor: Some(100_000),
+                final_price_minor: final_price,
+                has_override,
+                currency: "USD".into(),
+                market_scope: Some("international".into()),
+            },
+        }
+    }
 
     #[test]
     fn query_context_contains_only_abstract_service_information() {
@@ -1211,5 +1342,130 @@ mod tests {
         assert!(!cooldown_active(None));
         assert!(should_use_cache(Some(&future), false));
         assert!(!should_use_cache(Some(&future), true));
+    }
+
+    #[test]
+    fn context_and_salary_sources_never_qualify_for_suggestions() {
+        assert!(source_kind_supports_suggestions(
+            "market_price",
+            "professional_tariff"
+        ));
+        assert!(!source_kind_supports_suggestions(
+            "context_only",
+            "rate_benchmark"
+        ));
+        assert!(!source_kind_supports_suggestions("market_price", "salary"));
+        assert!(!source_kind_supports_suggestions("currency", "currency"));
+    }
+
+    #[test]
+    fn market_suggestion_preserves_configuration_final_price_and_revision() {
+        tauri::async_runtime::block_on(async {
+            let pool = suggestion_test_pool().await;
+            let configuration = r#"{"data":{"estimatedHours":36}}"#;
+            sqlx::query("INSERT INTO quote_services (id,suggested_subtotal_minor,final_subtotal_minor,has_override,row_revision,configuration_json,updated_at) VALUES ('service',110000,175000,1,7,?,'before')")
+                .bind(configuration)
+                .execute(&pool)
+                .await
+                .expect("service");
+            let job = market_job(7, configuration, Some(175_000), true);
+            let mut tx = pool.begin().await.expect("transaction");
+            assert!(
+                apply_market_suggestion_if_current(&mut tx, &job, 140_000, "after")
+                    .await
+                    .expect("conditional update")
+            );
+            tx.commit().await.expect("commit");
+            let row: (String, Option<i64>, Option<i64>, bool, i64) = sqlx::query_as(
+                "SELECT configuration_json,suggested_subtotal_minor,final_subtotal_minor,has_override,row_revision FROM quote_services WHERE id='service'",
+            )
+            .fetch_one(&pool)
+            .await
+            .expect("saved row");
+            assert_eq!(row.0, configuration);
+            assert_eq!(row.1, Some(140_000));
+            assert_eq!(row.2, Some(175_000));
+            assert!(row.3);
+            assert_eq!(row.4, 7, "market evidence is not a user edit");
+        });
+    }
+
+    #[test]
+    fn market_suggestion_is_skipped_when_the_draft_changed() {
+        tauri::async_runtime::block_on(async {
+            let pool = suggestion_test_pool().await;
+            let original = r#"{"data":{"estimatedHours":36}}"#;
+            sqlx::query("INSERT INTO quote_services (id,suggested_subtotal_minor,final_subtotal_minor,has_override,row_revision,configuration_json,updated_at) VALUES ('service',110000,175000,1,7,?,'before')")
+                .bind(original)
+                .execute(&pool)
+                .await
+                .expect("service");
+            sqlx::query("UPDATE quote_services SET configuration_json=?, final_subtotal_minor=220000, row_revision=8, updated_at='user-save' WHERE id='service'")
+                .bind(r#"{"data":{"estimatedHours":48}}"#)
+                .execute(&pool)
+                .await
+                .expect("user edit");
+            let job = market_job(7, original, Some(175_000), true);
+            let mut tx = pool.begin().await.expect("transaction");
+            assert!(
+                !apply_market_suggestion_if_current(&mut tx, &job, 140_000, "after")
+                    .await
+                    .expect("conditional update")
+            );
+            tx.commit().await.expect("commit");
+            let row: (String, Option<i64>, Option<i64>, i64) = sqlx::query_as(
+                "SELECT configuration_json,suggested_subtotal_minor,final_subtotal_minor,row_revision FROM quote_services WHERE id='service'",
+            )
+            .fetch_one(&pool)
+            .await
+            .expect("saved row");
+            assert_eq!(row.0, r#"{"data":{"estimatedHours":48}}"#);
+            assert_eq!(row.1, Some(110_000));
+            assert_eq!(row.2, Some(220_000));
+            assert_eq!(row.3, 8);
+        });
+    }
+
+    #[test]
+    fn catalog_migration_keeps_only_bcra_automatic_and_never_restores_tarifario_url() {
+        tauri::async_runtime::block_on(async {
+            let options = SqliteConnectOptions::from_str("sqlite::memory:")
+                .expect("valid sqlite options")
+                .create_if_missing(true)
+                .foreign_keys(true);
+            let pool = SqlitePoolOptions::new()
+                .max_connections(1)
+                .connect_with(options)
+                .await
+                .expect("pool");
+            sqlx::migrate!("./migrations")
+                .run(&pool)
+                .await
+                .expect("migrations");
+            let tarifario: (Option<String>, String, String, String, bool, String) = sqlx::query_as(
+                "SELECT base_url,usage_mode,acquisition_mode,automation_status,participates_in_suggestions,default_data_json FROM market_sources WHERE system_key='tarifario'",
+            )
+            .fetch_one(&pool)
+            .await
+            .expect("tarifario");
+            assert_eq!(tarifario.0, None);
+            assert_eq!(tarifario.1, "context_only");
+            assert_eq!(tarifario.2, "manual");
+            assert_eq!(tarifario.3, "MANUAL_ONLY");
+            assert!(!tarifario.4);
+            assert!(tarifario.5.contains("\"baseUrl\":null"));
+
+            let bcra: (String, String, String, bool, String) = sqlx::query_as(
+                "SELECT usage_mode,acquisition_mode,automation_status,participates_in_suggestions,adapter_key FROM market_sources WHERE system_key='bcra'",
+            )
+            .fetch_one(&pool)
+            .await
+            .expect("bcra");
+            assert_eq!(bcra.0, "currency");
+            assert_eq!(bcra.1, "auto_http");
+            assert_eq!(bcra.2, "APPROVED");
+            assert!(!bcra.3);
+            assert_eq!(bcra.4, "bcra");
+        });
     }
 }

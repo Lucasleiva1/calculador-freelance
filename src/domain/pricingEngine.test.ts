@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { applySuggestedDefaults, calculateSustainableRate, createPricingSnapshot, runPricingEngine } from "./pricingEngine";
-import type { AppSettings, EconomicProfile, ParameterOption, PricingConfiguration, PricingRule, ServiceDefinition, ServiceParameter } from "./types";
+import { applySuggestedDefaults, calculateSustainableRate, createPricingSnapshot, resultFromService, runPricingEngine } from "./pricingEngine";
+import type { AppSettings, EconomicProfile, ParameterOption, PricingConfiguration, PricingRule, QuoteService, ServiceDefinition, ServiceParameter } from "./types";
 
 const stamp = "2026-08-09T00:00:00Z";
 const definition: ServiceDefinition = { id: "service-programming", serviceType: "programming", name: "Programación", description: null, version: 4, enabled: true, suggestionsEnabled: true, defaultStrategy: "balanced", competitiveMarginMicros: 100_000, balancedMarginMicros: 200_000, premiumMarginMicros: 250_000, createdAt: stamp, updatedAt: stamp };
@@ -56,6 +56,22 @@ describe("PricingEngine configurable", () => {
     rules[0].amountUsdMinor = 99_999;
     expect(persisted.definition.version).toBe(4);
     expect(persisted.result.finalSubtotalMinor).toBe(70_187);
+  });
+  it("muestra una sugerencia de mercado persistida sin reescribir el snapshot ni el precio final", () => {
+    const result = runPricingEngine(input);
+    const snapshot = JSON.stringify(createPricingSnapshot(input, result));
+    const service: QuoteService = {
+      id: "service", quoteId: "quote", serviceType: "programming", title: "Sitio", sortOrder: 0,
+      configurationVersion: 1, configurationJson: JSON.stringify({ data: input.parameterValues }),
+      calculatedSubtotalMinor: result.calculatedSubtotalMinor, suggestedSubtotalMinor: 88_000,
+      finalSubtotalMinor: result.finalSubtotalMinor, hasOverride: false, manualSubtotalMinor: null,
+      manualReason: null, pricingSnapshotJson: snapshot, serviceDefinitionVersion: definition.version,
+      rowRevision: 4, deletedAt: null, createdAt: stamp, updatedAt: stamp,
+    };
+    const visible = resultFromService(service)!;
+    expect(visible.suggestedSubtotalMinor).toBe(88_000);
+    expect(visible.finalSubtotalMinor).toBe(result.finalSubtotalMinor);
+    expect(service.pricingSnapshotJson).toBe(snapshot);
   });
 });
 

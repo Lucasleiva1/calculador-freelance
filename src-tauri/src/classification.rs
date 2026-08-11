@@ -1416,7 +1416,20 @@ pub async fn save_engine_source(
             return Err(AppError::Validation("Asignación de fuente inválida.".into()));
         }
         let score = (input.match_score.clamp(0.0, 1.0) * 1_000_000.0).round() as i64;
-        let participates = input.participates_in_suggestions && input.role == "reference";
+        let source_kind: Option<(String, String)> = sqlx::query_as(
+            "SELECT usage_mode, source_type FROM market_sources WHERE id=? AND archived_at IS NULL",
+        )
+        .bind(&input.source_id)
+        .fetch_optional(&state.pool)
+        .await?;
+        let (usage_mode, source_type) = source_kind.ok_or(AppError::NotFound)?;
+        let participates = input.participates_in_suggestions
+            && input.role == "reference"
+            && usage_mode == "market_price"
+            && !matches!(
+                source_type.as_str(),
+                "salary" | "job_board" | "methodology" | "currency"
+            );
         let timestamp = now();
         sqlx::query(
             "INSERT INTO pricing_engine_sources

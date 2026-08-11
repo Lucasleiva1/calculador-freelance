@@ -15,7 +15,7 @@ const snapshot: MarketSnapshot = {
   observationCount: 8, comparableObservationCount: 6, sourceCount: 3, minimumFilteredMinor: 58_000,
   p25Minor: 60_000, marketMedianMinor: 67_000, p75Minor: 79_000, maximumFilteredMinor: 90_000,
   confidenceLevel: "MEDIUM", calculatedPriceMinor: 54_000, suggestedPriceMinor: 65_000,
-  finalPriceMinorAtCreation: 72_000, summaryJson: "{}", createdAt: "2026-08-10T12:00:00Z",
+  finalPriceMinorAtCreation: 72_000, baseServiceRevision: 4, suggestionUpdateStatus: "APPLIED", suggestionUpdateMessage: "Se actualizo solo el sugerido.", summaryJson: "{}", createdAt: "2026-08-10T12:00:00Z",
 };
 
 describe("market intelligence domain", () => {

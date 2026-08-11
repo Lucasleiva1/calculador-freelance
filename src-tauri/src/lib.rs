@@ -1,10 +1,12 @@
 mod classification;
 mod commands;
 mod db;
+mod economy_import;
 mod error;
 mod history;
 mod market;
 mod models;
+mod phase6;
 
 use tauri::Manager;
 
@@ -42,6 +44,7 @@ pub fn run() {
             commands::save_pricing_rule,
             commands::delete_pricing_rule,
             commands::save_economic_profile,
+            economy_import::extract_economy_pdf_text,
             commands::save_market_source,
             commands::delete_market_source,
             commands::restore_market_source,
@@ -63,6 +66,15 @@ pub fn run() {
             history::update_quote_admin,
             history::duplicate_quote,
             history::delete_quote_permanently,
+            phase6::get_professional_profile,
+            phase6::save_professional_profile,
+            phase6::get_client_document_config,
+            phase6::save_client_document_config,
+            phase6::create_client_quote_document,
+            phase6::export_client_quote_pdf,
+            phase6::create_pricing_backup,
+            phase6::inspect_pricing_backup,
+            phase6::restore_pricing_backup,
             classification::classify_pricing_engine,
             classification::classify_market_source,
             classification::test_ollama,

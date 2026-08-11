@@ -477,6 +477,9 @@ pub struct MarketSnapshot {
     pub calculated_price_minor: Option<i64>,
     pub suggested_price_minor: Option<i64>,
     pub final_price_minor_at_creation: Option<i64>,
+    pub base_service_revision: Option<i64>,
+    pub suggestion_update_status: String,
+    pub suggestion_update_message: Option<String>,
     pub summary_json: String,
     pub created_at: String,
 }
@@ -504,15 +507,32 @@ pub struct MarketResearchJobItem {
 pub struct MarketResearchJob {
     pub id: String,
     pub quote_service_id: String,
+    pub base_service_revision: i64,
     pub status: String,
     pub completed: i64,
     pub total: i64,
     pub cancel_requested: bool,
     pub items: Vec<MarketResearchJobItem>,
     pub snapshot_id: Option<String>,
+    pub suggestion_update_status: String,
+    pub suggestion_update_message: Option<String>,
     pub error: Option<String>,
     pub started_at: String,
     pub finished_at: Option<String>,
+    #[serde(skip)]
+    pub baseline: MarketResearchBaseline,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct MarketResearchBaseline {
+    pub quote_id: String,
+    pub service_type: String,
+    pub configuration_json: String,
+    pub calculated_price_minor: Option<i64>,
+    pub final_price_minor: Option<i64>,
+    pub has_override: bool,
+    pub currency: String,
+    pub market_scope: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

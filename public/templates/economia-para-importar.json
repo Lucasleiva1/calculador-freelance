@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "moneda": "ARS",
+  "tarifaManualPorHora": null,
+  "ingresoMensualObjetivo": null,
+  "gastosMensuales": null,
+  "horasFacturablesPorMes": null,
+  "reservaImpuestosPorcentaje": null,
+  "margenDeseadoPorcentaje": null,
+  "urgenciaPredeterminadaPorcentaje": null,
+  "diasDeTrabajoPorMes": null,
+  "semanasVacacionesPorAnio": null,
+  "fuentes": []
+}

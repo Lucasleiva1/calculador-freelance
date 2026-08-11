@@ -5,11 +5,13 @@ import { formatMoney, majorToMinor, minorToInput } from "../../domain/money";
 import type { QuotePriceKind, SaveQuoteSnapshotInput, Workspace } from "../../domain/types";
 import { Button, Field, Input, Modal } from "../../components/ui";
 
-export function SaveQuoteModal({ workspace, result, onClose, onSave }: {
+export function SaveQuoteModal({ workspace, result, onClose, onSave, title, submitLabel }: {
   workspace: Workspace;
   result: ProjectResult;
   onClose: () => void;
   onSave: (input: SaveQuoteSnapshotInput) => Promise<void>;
+  title?: string;
+  submitLabel?: string;
 }) {
   const [notes, setNotes] = useState(workspace.quote.notes ?? "");
   const [kind, setKind] = useState<QuotePriceKind>(workspace.quote.selectedPriceKind ?? "recommended");
@@ -43,7 +45,8 @@ export function SaveQuoteModal({ workspace, result, onClose, onSave }: {
     finally { setSaving(false); }
   }
 
-  return <Modal title={workspace.quote.snapshotRevision > 0 ? "Guardar nueva revisión" : "Guardar cotización"} onClose={onClose} width="720px">
+  const defaultSubmitLabel = workspace.quote.snapshotRevision > 0 ? "Crear revisión" : "Guardar cotización";
+  return <Modal title={title ?? (workspace.quote.snapshotRevision > 0 ? "Guardar nueva revisión" : "Guardar cotización")} onClose={onClose} width="720px">
     <form onSubmit={submit}>
       <div className="modal__body quote-save">
         <div className="snapshot-guidance"><Archive size={20} /><div><strong>El proyecto ya se guarda automáticamente</strong><span>Esta acción crea un corte histórico: precios, módulos, parámetros y fuentes quedan congelados en una revisión.</span></div></div>
@@ -56,7 +59,7 @@ export function SaveQuoteModal({ workspace, result, onClose, onSave }: {
         {result.unpricedCount > 0 && <p className="quote-save__warning"><Info size={16} />{result.totalMinor == null ? "Completá al menos un módulo o elegí un precio personalizado para guardar el borrador." : "Hay módulos sin precio. Podés guardar el borrador con un importe personalizado; quedará identificado como cálculo parcial."}</p>}
         {error && <p className="form-error" role="alert">{error}</p>}
       </div>
-      <div className="modal__actions"><Button type="button" onClick={onClose}>Cancelar</Button><Button type="submit" variant="accent" disabled={saving}><Check size={16} /> {saving ? "Guardando…" : workspace.quote.snapshotRevision > 0 ? "Crear revisión" : "Guardar cotización"}</Button></div>
+      <div className="modal__actions"><Button type="button" onClick={onClose}>Cancelar</Button><Button type="submit" variant="accent" disabled={saving}><Check size={16} /> {saving ? "Guardando…" : submitLabel ?? defaultSubmitLabel}</Button></div>
     </form>
   </Modal>;
 }

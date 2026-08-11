@@ -12,6 +12,7 @@ use crate::{
         DuplicateQuoteInput, QuoteHistoryDetail, QuoteHistoryItem, QuoteService,
         QuoteSnapshotRevision, SaveQuoteSnapshotInput, UpdateQuoteAdminInput, Workspace,
     },
+    phase6::assign_quote_number_in_transaction,
 };
 
 #[derive(Debug, FromRow)]
@@ -395,6 +396,7 @@ pub(crate) async fn save_snapshot_in_pool(
     .bind(&input.quote_id)
     .execute(&mut *tx)
     .await?;
+    assign_quote_number_in_transaction(&mut tx, &input.quote_id, &timestamp).await?;
     tx.commit().await?;
     get_detail_from_pool(pool, &input.quote_id, Some(revision)).await
 }
@@ -787,6 +789,7 @@ pub(crate) async fn duplicate_quote_in_pool(
     .bind(&timestamp)
     .execute(&mut *tx)
     .await?;
+    assign_quote_number_in_transaction(&mut tx, &quote_id, &timestamp).await?;
     sqlx::query("UPDATE app_settings SET active_project_id=?,updated_at=? WHERE id=1")
         .bind(&project_id)
         .bind(&timestamp)
@@ -1012,6 +1015,10 @@ mod tests {
                 .await
                 .expect("saved snapshot");
             pool.close().await;
+            // On Windows a closed SqlitePool can retain its file handle until
+            // the pool value is dropped. Release it before reopening/removing
+            // the temporary database so the persistence test is deterministic.
+            drop(pool);
 
             let reopened = SqlitePoolOptions::new()
                 .max_connections(1)
@@ -1025,6 +1032,7 @@ mod tests {
             assert_eq!(detail.quote.recommended_total_minor, Some(120_000));
             assert!(detail.snapshot_json.contains("Alcance original"));
             reopened.close().await;
+            drop(reopened);
             let mut remove_error = None;
             for attempt in 0..5 {
                 match std::fs::remove_file(&path) {

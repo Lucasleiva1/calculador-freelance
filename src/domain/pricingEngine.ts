@@ -234,7 +234,31 @@ export function createPricingSnapshot(input: EngineInput, result: ServiceResult)
 
 export function resultFromService(service: QuoteService): ServiceResult | null {
   if (service.pricingSnapshotJson) {
-    try { return (JSON.parse(service.pricingSnapshotJson) as PricingSnapshot).result; } catch { /* fallback below */ }
+    try {
+      const snapshot = (JSON.parse(service.pricingSnapshotJson) as PricingSnapshot).result;
+      // La investigación de mercado actualiza únicamente la columna de sugerido.
+      // El snapshot de cálculo es histórico: nunca se reescribe desde mercado,
+      // así que los campos persistidos son la fuente de verdad para los precios.
+      const calculated = service.calculatedSubtotalMinor ?? snapshot.calculatedSubtotalMinor;
+      const suggested = service.suggestedSubtotalMinor ?? snapshot.suggestedSubtotalMinor;
+      const final = service.finalSubtotalMinor
+        ?? service.manualSubtotalMinor
+        ?? snapshot.finalSubtotalMinor
+        ?? suggested
+        ?? calculated;
+      return {
+        ...snapshot,
+        status: final == null ? snapshot.status : "ready",
+        calculatedSubtotalMinor: calculated,
+        suggestedSubtotalMinor: suggested,
+        finalSubtotalMinor: final,
+        effectiveSubtotalMinor: final,
+        hasOverride: service.hasOverride,
+        effectiveHourlyMinor: final != null && snapshot.hours && snapshot.hours > 0
+          ? Math.round((final - snapshot.externalCostsMinor) / snapshot.hours)
+          : snapshot.effectiveHourlyMinor,
+      };
+    } catch { /* fallback below */ }
   }
   if (service.finalSubtotalMinor == null && service.calculatedSubtotalMinor == null) return null;
   const final = service.finalSubtotalMinor ?? service.manualSubtotalMinor ?? service.suggestedSubtotalMinor ?? service.calculatedSubtotalMinor;

@@ -39,6 +39,13 @@ import type {
   SaveQuoteSnapshotInput,
   UpdateQuoteAdminInput,
   DuplicateQuoteInput,
+  ProfessionalProfile,
+  ProfessionalProfileInput,
+  ClientDocumentConfig,
+  ClientQuoteDocument,
+  ExportedFile,
+  BackupSummary,
+  RestoreResult,
 } from "../domain/types";
 
 export const api = {
@@ -68,6 +75,7 @@ export const api = {
   savePricingRule: (input: PricingRuleInput) => invoke<PricingConfiguration>("save_pricing_rule", { input }),
   deletePricingRule: (id: string) => invoke<PricingConfiguration>("delete_pricing_rule", { id }),
   saveEconomicProfile: (input: EconomicProfileInput) => invoke<PricingConfiguration>("save_economic_profile", { input }),
+  extractEconomyPdfText: (dataUrl: string) => invoke<string>("extract_economy_pdf_text", { dataUrl }),
   saveMarketSource: (input: MarketSourceInput) => invoke<PricingConfiguration>("save_market_source", { input }),
   deleteMarketSource: (id: string) => invoke<PricingConfiguration>("delete_market_source", { id }),
   restoreMarketSource: (id: string) => invoke<PricingConfiguration>("restore_market_source", { id }),
@@ -96,4 +104,13 @@ export const api = {
   updateQuoteAdmin: (input: UpdateQuoteAdminInput) => invoke<QuoteHistoryItem>("update_quote_admin", { input }),
   duplicateQuote: (input: DuplicateQuoteInput) => invoke<Workspace>("duplicate_quote", { input }),
   deleteQuotePermanently: (quoteId: string) => invoke<void>("delete_quote_permanently", { quoteId }),
+  getProfessionalProfile: () => invoke<ProfessionalProfile>("get_professional_profile"),
+  saveProfessionalProfile: (input: ProfessionalProfileInput) => invoke<ProfessionalProfile>("save_professional_profile", { input }),
+  getClientDocumentConfig: (quoteId: string) => invoke<ClientDocumentConfig>("get_client_document_config", { quoteId }),
+  saveClientDocumentConfig: (config: ClientDocumentConfig) => invoke<void>("save_client_document_config", { config }),
+  createClientQuoteDocument: (config: ClientDocumentConfig) => invoke<ClientQuoteDocument>("create_client_quote_document", { config }),
+  exportClientQuotePdf: (document: ClientQuoteDocument) => invoke<ExportedFile>("export_client_quote_pdf", { document }),
+  createPricingBackup: () => invoke<ExportedFile>("create_pricing_backup"),
+  inspectPricingBackup: (content: string) => invoke<BackupSummary>("inspect_pricing_backup", { content }),
+  restorePricingBackup: (content: string) => invoke<RestoreResult>("restore_pricing_backup", { content }),
 };

@@ -58,6 +58,36 @@ export interface QuoteSnapshotDocument {
   totals: { floorMinor: number | null; recommendedMinor: number | null; premiumMinor: number | null; selectedMinor: number | null; totalHoursMicros: number; externalCostsMinor: number; effectiveHourlyMinor: number | null; marginMicros: number | null };
 }
 export interface QuoteHistoryDetail { quote: QuoteHistoryItem; snapshotJson: string; snapshotCreatedAt: string; displayedRevision: number; revisions: QuoteSnapshotRevision[]; }
+export interface ProfessionalProfile {
+  displayName: string; businessName: string | null; email: string | null; phone: string | null;
+  website: string | null; location: string | null; defaultCurrency: Currency;
+  defaultQuoteValidityDays: 7 | 15 | 30 | null; defaultClientTerms: string | null;
+  documentTheme: "light" | "dark"; updatedAt: string; logoDataUrl: string | null;
+}
+export interface ProfessionalProfileInput {
+  displayName: string; businessName?: string; email?: string; phone?: string; website?: string;
+  location?: string; logoDataUrl?: string | null; removeLogo: boolean; defaultCurrency: Currency;
+  defaultQuoteValidityDays: 7 | 15 | 30 | null; defaultClientTerms?: string;
+  documentTheme: "light" | "dark";
+}
+export interface ClientDocumentConfig {
+  quoteId: string; presentationMode: "global" | "itemized"; scope: string | null;
+  revisions: string | null; estimatedTimeline: string | null; clientNotes: string | null;
+  validUntil: string | null; serviceDescriptions: Record<string, string>;
+  /** Snapshot a usar sólo al renderizar un documento histórico. No se persiste. */
+  snapshotRevision?: number | null;
+}
+export interface ClientQuoteLine { title: string; description: string | null; quantity: string | null; priceMinor: number; }
+export interface ClientQuoteDocument {
+  quoteNumber: string; issueDate: string; validUntil: string | null; currency: Currency;
+  profile: Pick<ProfessionalProfile, "displayName" | "businessName" | "email" | "phone" | "website" | "location" | "logoDataUrl">;
+  clientName: string; projectName: string; presentationMode: "global" | "itemized";
+  lines: ClientQuoteLine[]; totalMinor: number; scope: string | null; revisions: string | null;
+  estimatedTimeline: string | null; clientNotes: string | null; documentTheme: "light" | "dark";
+}
+export interface ExportedFile { path: string; filename: string; }
+export interface BackupSummary { schemaVersion: number; exportedAt: string; clients: number; quotes: number; sources: number; hasProfileLogo: boolean; }
+export interface RestoreResult { automaticBackupPath: string; summary: BackupSummary; }
 export interface SaveQuoteSnapshotInput {
   quoteId: string; notes?: string; selectedPriceKind: QuotePriceKind; selectedPriceMinor: number | null;
   floorTotalMinor: number | null; recommendedTotalMinor: number | null; premiumTotalMinor: number | null;
@@ -153,12 +183,14 @@ export interface MarketSnapshot {
   minimumFilteredMinor: number | null; p25Minor: number | null; marketMedianMinor: number | null;
   p75Minor: number | null; maximumFilteredMinor: number | null; confidenceLevel: "HIGH" | "MEDIUM" | "LOW" | "INSUFFICIENT";
   calculatedPriceMinor: number | null; suggestedPriceMinor: number | null; finalPriceMinorAtCreation: number | null;
+  baseServiceRevision: number | null; suggestionUpdateStatus: MarketSuggestionUpdateStatus; suggestionUpdateMessage: string | null;
   summaryJson: string; createdAt: string;
 }
 
 export interface MarketOverview { latestSnapshot: MarketSnapshot | null; observations: MarketObservation[]; history: MarketSnapshot[]; }
 export interface MarketResearchJobItem { sourceId: string; sourceName: string; status: MarketSourceStatus | "READY"; message: string | null; observationCount: number; }
-export interface MarketResearchJob { id: string; quoteServiceId: string; status: "RUNNING" | "COMPLETED" | "CANCELLED" | "ERROR"; completed: number; total: number; cancelRequested: boolean; items: MarketResearchJobItem[]; snapshotId: string | null; error: string | null; startedAt: string; finishedAt: string | null; }
+export type MarketSuggestionUpdateStatus = "PENDING" | "APPLIED" | "SKIPPED_DRAFT_CHANGED" | "INSUFFICIENT" | "DISABLED" | "LEGACY";
+export interface MarketResearchJob { id: string; quoteServiceId: string; baseServiceRevision: number; status: "RUNNING" | "COMPLETED" | "CANCELLED" | "ERROR"; completed: number; total: number; cancelRequested: boolean; items: MarketResearchJobItem[]; snapshotId: string | null; suggestionUpdateStatus: MarketSuggestionUpdateStatus; suggestionUpdateMessage: string | null; error: string | null; startedAt: string; finishedAt: string | null; }
 export interface MarketObservationPreview { serviceType: string; subservice: string | null; priceMinMinor: number | null; priceMaxMinor: number | null; priceValueMinor: number | null; currency: string; unit: string; priceType: MarketPriceType; region: string; evidence: string | null; }
 export interface SourceTestResult { sourceId: string; status: MarketSourceStatus; message: string; httpStatus: number | null; observations: MarketObservationPreview[]; }
 export interface PricingConfiguration { definitions: ServiceDefinition[]; parameters: ServiceParameter[]; options: ParameterOption[]; rules: PricingRule[]; economicProfiles: EconomicProfile[]; marketSources: MarketSource[]; engineCategories: EngineCategory[]; pricingEngines: PricingEngine[]; engineSources: PricingEngineSource[]; }
