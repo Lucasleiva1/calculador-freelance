@@ -7,7 +7,12 @@ import { activeHourlyRate, emptyResult, resultFromService, runPricingEngine } fr
 import type { ServiceConfigurationEnvelope } from "./types";
 
 export interface EvaluatedService { service: QuoteService; result: ServiceResult; }
-export interface ProjectResult { services: EvaluatedService[]; totalMinor: number | null; totalHours: number; externalCostsMinor: number; effectiveHourlyMinor: number | null; unpricedCount: number; isPartial: boolean; }
+export interface ProjectResult {
+  services: EvaluatedService[]; totalMinor: number | null; totalHours: number;
+  externalCostsMinor: number; effectiveHourlyMinor: number | null; marginMicros: number | null;
+  pricingTiers: { floorMinor: number | null; recommendedMinor: number | null; premiumMinor: number | null };
+  unpricedCount: number; isPartial: boolean;
+}
 
 function liveResult(service: QuoteService, workspace: Workspace, settings: AppSettings, pricing: PricingConfiguration) {
   try {
@@ -34,5 +39,18 @@ export function evaluateWorkspace(workspace: Workspace, settings: AppSettings, p
   const totalMinor = priced.length === 0 ? null : priced.reduce((sum, item) => sum + (item.result.finalSubtotalMinor ?? 0), 0);
   const totalHours = services.reduce((sum, item) => sum + (item.result.hours ?? 0), 0);
   const externalCostsMinor = services.reduce((sum, item) => sum + item.result.externalCostsMinor, 0);
-  return { services, totalMinor, totalHours, externalCostsMinor, effectiveHourlyMinor: totalMinor != null && totalHours > 0 ? Math.round((totalMinor - externalCostsMinor) / totalHours) : null, unpricedCount, isPartial: unpricedCount > 0 && priced.length > 0 };
+  const tierTotal = (tier: "floor" | "recommended" | "premium") => {
+    const values = priced.map(({ result }) => result.pricingTiers?.[tier].totalMinor
+      ?? (tier === "floor" ? result.calculatedSubtotalMinor : tier === "recommended" ? result.suggestedSubtotalMinor ?? result.calculatedSubtotalMinor : result.suggestedSubtotalMinor ?? result.calculatedSubtotalMinor));
+    return values.length === 0 || values.some((value) => value == null) ? null : values.reduce<number>((sum, value) => sum + (value ?? 0), 0);
+  };
+  const weightedMarginBase = priced.reduce((sum, item) => sum + (item.result.finalSubtotalMinor ?? 0), 0);
+  const marginMicros = weightedMarginBase > 0 ? Math.round(priced.reduce((sum, item) => sum + (item.result.appliedMarginMicros ?? 0) * (item.result.finalSubtotalMinor ?? 0), 0) / weightedMarginBase) : null;
+  return {
+    services, totalMinor, totalHours, externalCostsMinor,
+    effectiveHourlyMinor: totalMinor != null && totalHours > 0 ? Math.max(0, Math.round((totalMinor - externalCostsMinor) / totalHours)) : null,
+    marginMicros,
+    pricingTiers: { floorMinor: tierTotal("floor"), recommendedMinor: tierTotal("recommended"), premiumMinor: tierTotal("premium") },
+    unpricedCount, isPartial: unpricedCount > 0 && priced.length > 0,
+  };
 }

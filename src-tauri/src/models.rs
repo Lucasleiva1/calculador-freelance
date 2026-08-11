@@ -38,8 +38,97 @@ pub struct Quote {
     pub version: i64,
     pub status: String,
     pub currency: String,
+    pub notes: Option<String>,
+    pub selected_price_kind: String,
+    pub selected_price_minor: Option<i64>,
+    pub floor_total_minor: Option<i64>,
+    pub recommended_total_minor: Option<i64>,
+    pub premium_total_minor: Option<i64>,
+    pub snapshot_revision: i64,
+    pub saved_at: Option<String>,
+    pub archived_at: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
+pub struct QuoteHistoryItem {
+    pub id: String,
+    pub project_id: String,
+    pub project_name: String,
+    pub client_id: String,
+    pub client_name: String,
+    pub currency: String,
+    pub status: String,
+    pub notes: Option<String>,
+    pub selected_price_kind: String,
+    pub selected_price_minor: Option<i64>,
+    pub floor_total_minor: Option<i64>,
+    pub recommended_total_minor: Option<i64>,
+    pub premium_total_minor: Option<i64>,
+    pub snapshot_revision: i64,
+    pub saved_at: String,
+    pub updated_at: String,
+    pub service_count: i64,
+    pub service_titles: String,
+    pub service_types: String,
+}
+
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
+pub struct QuoteSnapshotRevision {
+    pub revision: i64,
+    pub reason: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuoteHistoryDetail {
+    pub quote: QuoteHistoryItem,
+    pub snapshot_json: String,
+    pub snapshot_created_at: String,
+    pub displayed_revision: i64,
+    pub revisions: Vec<QuoteSnapshotRevision>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveQuoteSnapshotInput {
+    pub quote_id: String,
+    pub notes: Option<String>,
+    pub selected_price_kind: String,
+    pub selected_price_minor: Option<i64>,
+    pub floor_total_minor: Option<i64>,
+    pub recommended_total_minor: Option<i64>,
+    pub premium_total_minor: Option<i64>,
+    pub total_hours_micros: i64,
+    pub external_costs_minor: i64,
+    pub effective_hourly_minor: Option<i64>,
+    pub margin_micros: Option<i64>,
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateQuoteAdminInput {
+    pub quote_id: String,
+    pub project_name: String,
+    pub client_id: String,
+    pub notes: Option<String>,
+    pub status: String,
+    pub selected_price_kind: String,
+    pub selected_price_minor: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DuplicateQuoteInput {
+    pub quote_id: String,
+    pub project_name: Option<String>,
+    pub client_id: Option<String>,
+    pub revision: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]

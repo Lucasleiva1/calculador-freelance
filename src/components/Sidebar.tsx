@@ -1,7 +1,7 @@
 import {
   Archive,
   BriefcaseBusiness,
-  Clock3,
+  FileClock,
   FolderOpen,
   Layers3,
   PlusSquare,
@@ -19,7 +19,7 @@ const items: Array<{ id: AppSection; label: string; icon: typeof FolderOpen }> =
   { id: "clients", label: "Clientes", icon: Users },
   { id: "services", label: "Servicios", icon: Layers3 },
   { id: "market", label: "Mercado", icon: TrendingUp },
-  { id: "history", label: "Historial", icon: Clock3 },
+  { id: "history", label: "Cotizaciones", icon: FileClock },
 ];
 
 export function Sidebar({ section, onSection, onNewProject }: { section: AppSection; onSection: (section: AppSection) => void; onNewProject: () => void }) {
@@ -35,4 +35,3 @@ export function Sidebar({ section, onSection, onNewProject }: { section: AppSect
     </div>
   </aside>;
 }
-

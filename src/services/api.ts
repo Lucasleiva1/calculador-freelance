@@ -34,6 +34,11 @@ import type {
   EngineSourceInput,
   PricingEngineSource,
   OllamaStatus,
+  QuoteHistoryItem,
+  QuoteHistoryDetail,
+  SaveQuoteSnapshotInput,
+  UpdateQuoteAdminInput,
+  DuplicateQuoteInput,
 } from "../domain/types";
 
 export const api = {
@@ -85,4 +90,10 @@ export const api = {
   setPricingEngineArchived: (id: string, archived: boolean) => invoke<PricingEngine>("set_pricing_engine_archived", { id, archived }),
   saveEngineSource: (input: EngineSourceInput) => invoke<PricingEngineSource>("save_engine_source", { input }),
   removeEngineSource: (engineId: string, sourceId: string) => invoke<void>("remove_engine_source", { engineId, sourceId }),
+  listQuoteHistory: () => invoke<QuoteHistoryItem[]>("list_quote_history"),
+  getQuoteHistory: (quoteId: string, revision?: number) => invoke<QuoteHistoryDetail>("get_quote_history", { quoteId, revision }),
+  saveQuoteSnapshot: (input: SaveQuoteSnapshotInput) => invoke<QuoteHistoryDetail>("save_quote_snapshot", { input }),
+  updateQuoteAdmin: (input: UpdateQuoteAdminInput) => invoke<QuoteHistoryItem>("update_quote_admin", { input }),
+  duplicateQuote: (input: DuplicateQuoteInput) => invoke<Workspace>("duplicate_quote", { input }),
+  deleteQuotePermanently: (quoteId: string) => invoke<void>("delete_quote_permanently", { quoteId }),
 };

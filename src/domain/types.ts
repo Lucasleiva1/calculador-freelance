@@ -17,7 +17,55 @@ export type MarketPriceType = "HOURLY" | "DAILY" | "PROJECT" | "PER_MINUTE" | "P
 
 export interface Client { id: string; name: string; company: string | null; email: string | null; whatsapp: string | null; country: string | null; notes: string | null; status: "active" | "archived"; createdAt: string; updatedAt: string; }
 export interface ProjectSummary { id: string; clientId: string; clientName: string; name: string; currency: Currency; marketScope: MarketScope | null; status: "active" | "archived"; totalMinor: number | null; unpricedCount: number; updatedAt: string; }
-export interface Quote { id: string; projectId: string; version: number; status: "draft" | "sent" | "accepted" | "rejected" | "archived"; currency: Currency; createdAt: string; updatedAt: string; }
+export type QuoteStatus = "draft" | "sent" | "accepted" | "rejected" | "archived";
+export type QuotePriceKind = "floor" | "recommended" | "premium" | "custom";
+export interface Quote {
+  id: string; projectId: string; version: number; status: QuoteStatus; currency: Currency;
+  notes: string | null; selectedPriceKind: QuotePriceKind; selectedPriceMinor: number | null;
+  floorTotalMinor: number | null; recommendedTotalMinor: number | null; premiumTotalMinor: number | null;
+  snapshotRevision: number; savedAt: string | null; archivedAt: string | null;
+  createdAt: string; updatedAt: string;
+}
+
+export interface QuoteHistoryItem {
+  id: string; projectId: string; projectName: string; clientId: string; clientName: string;
+  currency: Currency; status: QuoteStatus; notes: string | null; selectedPriceKind: QuotePriceKind;
+  selectedPriceMinor: number | null; floorTotalMinor: number | null;
+  recommendedTotalMinor: number | null; premiumTotalMinor: number | null;
+  snapshotRevision: number; savedAt: string; updatedAt: string; serviceCount: number;
+  serviceTitles: string; serviceTypes: string;
+}
+export interface QuoteSnapshotRevision { revision: number; reason: "manual_save" | "calculation_update" | "duplicate"; createdAt: string; }
+export interface QuoteSourceSnapshot {
+  id: string; name: string; url: string | null; sourceType: string; country: string | null;
+  currency: string | null; updatedAt: string | null; contribution: string | null;
+  role: string; preference: string;
+}
+export interface QuoteSnapshotService {
+  id: string; serviceType: string; title: string; sortOrder: number; configurationVersion: number;
+  configuration: unknown; calculatedSubtotalMinor: number | null; suggestedSubtotalMinor: number | null;
+  finalSubtotalMinor: number | null; hasOverride: boolean; manualSubtotalMinor: number | null;
+  manualReason: string | null; serviceDefinitionVersion: number | null; pricingSnapshot: unknown;
+  sources: { assigned: QuoteSourceSnapshot[]; marketSnapshot: Record<string, unknown> | null; observations: Array<Record<string, unknown>> };
+}
+export interface QuoteSnapshotDocument {
+  schemaVersion: 1; savedAt: string; revision: number;
+  duplicatedFrom?: { quoteId: string; revision: number };
+  quote: { id: string; version: number; status: QuoteStatus; currency: Currency; notes: string | null; selectedPriceKind: QuotePriceKind; selectedPriceMinor: number | null };
+  project: { id: string; name: string; marketScope: MarketScope | null };
+  client: { id: string; name: string; company: string | null };
+  services: QuoteSnapshotService[];
+  totals: { floorMinor: number | null; recommendedMinor: number | null; premiumMinor: number | null; selectedMinor: number | null; totalHoursMicros: number; externalCostsMinor: number; effectiveHourlyMinor: number | null; marginMicros: number | null };
+}
+export interface QuoteHistoryDetail { quote: QuoteHistoryItem; snapshotJson: string; snapshotCreatedAt: string; displayedRevision: number; revisions: QuoteSnapshotRevision[]; }
+export interface SaveQuoteSnapshotInput {
+  quoteId: string; notes?: string; selectedPriceKind: QuotePriceKind; selectedPriceMinor: number | null;
+  floorTotalMinor: number | null; recommendedTotalMinor: number | null; premiumTotalMinor: number | null;
+  totalHoursMicros: number; externalCostsMinor: number; effectiveHourlyMinor: number | null;
+  marginMicros: number | null; reason?: "manual_save" | "calculation_update";
+}
+export interface UpdateQuoteAdminInput { quoteId: string; projectName: string; clientId: string; notes?: string; status: QuoteStatus; selectedPriceKind: QuotePriceKind; selectedPriceMinor: number | null; }
+export interface DuplicateQuoteInput { quoteId: string; projectName?: string; clientId?: string; revision?: number; }
 
 export interface QuoteService {
   id: string; quoteId: string; serviceType: ServiceType; title: string; sortOrder: number;

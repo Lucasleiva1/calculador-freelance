@@ -178,7 +178,21 @@ export function runPricingEngine(input: EngineInput): ServiceResult {
 
   const canSuggest = complete && input.settings.suggestionsEnabled && definition.suggestionsEnabled;
   const strategyMargin = marginForStrategy(definition, input.settings.suggestionStrategy) ?? economicMargin;
-  const suggested = canSuggest ? withMargin(costMinor, strategyMargin) : null;
+  const floor = calculated;
+  const recommended = complete && floor != null
+    ? Math.max(floor, withMargin(costMinor, definition.balancedMarginMicros ?? economicMargin))
+    : null;
+  const premium = complete && recommended != null
+    ? Math.max(recommended, withMargin(costMinor, definition.premiumMarginMicros ?? definition.balancedMarginMicros ?? economicMargin))
+    : null;
+  const selectedTier: "floor" | "recommended" | "premium" = input.settings.suggestionStrategy === "premium" ? "premium" : input.settings.suggestionStrategy === "competitive" ? "floor" : "recommended";
+  const pricingTiers = floor != null && recommended != null && premium != null ? {
+    floor: { unitMinor: floor, totalMinor: floor, marginMicros: economicMargin ?? 0 },
+    recommended: { unitMinor: recommended, totalMinor: recommended, marginMicros: definition.balancedMarginMicros ?? economicMargin ?? 0 },
+    premium: { unitMinor: premium, totalMinor: premium, marginMicros: definition.premiumMarginMicros ?? definition.balancedMarginMicros ?? economicMargin ?? 0 },
+    selected: selectedTier,
+  } : undefined;
+  const suggested = canSuggest && pricingTiers ? pricingTiers[selectedTier].totalMinor : null;
   const hasOverride = Boolean(input.hasOverride && input.finalOverrideMinor != null);
   const final = hasOverride ? input.finalOverrideMinor ?? null : suggested ?? calculated;
   if (hasOverride && final != null) lines.push({ label: "Precio final manual", kind: "override", amountMinor: final - (suggested ?? calculated ?? 0) });
@@ -195,6 +209,7 @@ export function runPricingEngine(input: EngineInput): ServiceResult {
     appliedMarginMicros: canSuggest ? strategyMargin : economicMargin,
     lines,
     issues: [...new Set(issues)],
+    pricingTiers,
   };
 }
 

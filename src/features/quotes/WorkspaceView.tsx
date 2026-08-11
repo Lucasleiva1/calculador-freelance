@@ -58,6 +58,7 @@ export function WorkspaceView({
   marketJob,
   onUpdateMarket,
   onCancelMarket,
+  onSaveQuote,
 }: {
   workspace: Workspace;
   settings: AppSettings;
@@ -85,6 +86,7 @@ export function WorkspaceView({
   marketJob: MarketResearchJob | null;
   onUpdateMarket: (force?: boolean) => Promise<void>;
   onCancelMarket: () => Promise<void>;
+  onSaveQuote: () => Promise<void>;
 }) {
   const [addOpen, setAddOpen] = useState(false);
   useEffect(() => {
@@ -122,7 +124,7 @@ export function WorkspaceView({
   return <div className="workspace-layout">
     <main className="workspace-main">
       <div className="workspace-scroll">
-        <header className="page-header"><div><span className="eyebrow">Cotización · Draft v{workspace.quote.version}</span><h1>Cotización</h1><p>Construí el proyecto por módulos independientes.</p></div><div className={`save-indicator save-indicator--${activeStatus ?? "saved"}`}><StatusDot tone={activeStatus === "error" ? "danger" : activeStatus === "saving" ? "muted" : "accent"} />{saveLabel(activeStatus)}{activeStatus === "error" && active && <button onClick={() => onRetry(active.id)}>Reintentar</button>}</div></header>
+        <header className="page-header"><div><span className="eyebrow">Cotización · Draft v{workspace.quote.version}{workspace.quote.snapshotRevision > 0 ? ` · Historial rev. ${workspace.quote.snapshotRevision}` : ""}</span><h1>Cotización</h1><p>Construí el proyecto por módulos independientes. El borrador se guarda automáticamente.</p></div><div className={`save-indicator save-indicator--${activeStatus ?? "saved"}`}><StatusDot tone={activeStatus === "error" ? "danger" : activeStatus === "saving" ? "muted" : "accent"} />{saveLabel(activeStatus)}{activeStatus === "error" && active && <button onClick={() => onRetry(active.id)}>Reintentar</button>}</div></header>
         <div className="service-tabs">
           {workspace.services.map((service, index) => <button key={service.id} className={active?.id === service.id ? "is-active" : ""} onClick={() => onActiveService(service.id)}><span>{String(index + 1).padStart(2, "0")}</span><EngineIcon type={service.serviceType} /><strong>{service.title}</strong></button>)}
           <div className="add-service"><button className="add-service__trigger" onClick={() => setAddOpen(!addOpen)}><Plus size={17} /> Agregar módulo</button>{addOpen && <div className="add-service__menu">{activeEngines.map((engine) => <button key={engine.id} onClick={async () => { setAddOpen(false); await onAddService(engine.engineKey); }}><EngineIcon type={engine.engineKey} size={17} /><span>{engine.name}<small>{engine.engineType === "product" ? "Producto físico" : engine.engineType === "hybrid" ? "Servicio + producto" : engine.engineKey === "video-editing" ? "Editor audiovisual" : "Servicio profesional"}</small></span></button>)}<button onClick={() => { setAddOpen(false); }} disabled><Plus size={17} /><span>Nuevo motor<small>Crealo desde Servicios</small></span></button></div>}</div>
@@ -138,6 +140,6 @@ export function WorkspaceView({
       </div>
     </main>
     <ResultInspector key={activeServiceId ?? "empty"} result={result} currency={workspace.quote.currency} activeServiceId={activeServiceId} suggestionsEnabled={settings.suggestionsEnabled} market={market} marketJob={marketJob} onUpdateMarket={onUpdateMarket} onCancelMarket={onCancelMarket} onFinalPriceChange={active ? (final, reason) => onFinalPriceChange(active, final, reason) : undefined} />
-    <footer className="actionbar"><div className="actionbar__summary"><FileOutput size={20} /><span>Resumen del proyecto</span><i /><strong>{workspace.services.length} {workspace.services.length === 1 ? "módulo" : "módulos"}</strong><StatusDot /><i /><span>{result.isPartial ? "Subtotal parcial" : "Total"}</span><b>{formatMoney(result.totalMinor, workspace.quote.currency)}</b></div><div className="actionbar__actions"><Button disabled>Guardar borrador</Button><Button variant="accent" disabled>Generar presupuesto · Próximamente</Button><Button disabled>Exportar / PDF</Button></div></footer>
+    <footer className="actionbar"><div className="actionbar__summary"><FileOutput size={20} /><span>Resumen del proyecto</span><i /><strong>{workspace.services.length} {workspace.services.length === 1 ? "módulo" : "módulos"}</strong><StatusDot /><i /><span>{result.isPartial ? "Subtotal parcial" : "Total"}</span><b>{formatMoney(result.totalMinor, workspace.quote.currency)}</b></div><div className="actionbar__actions"><Button onClick={() => void onSaveQuote()}>{workspace.quote.snapshotRevision > 0 ? "Guardar revisión" : "Guardar cotización"}</Button><Button variant="accent" disabled>Generar presupuesto · Próximamente</Button><Button disabled>Exportar / PDF</Button></div></footer>
   </div>;
 }

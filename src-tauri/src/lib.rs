@@ -2,6 +2,7 @@ mod classification;
 mod commands;
 mod db;
 mod error;
+mod history;
 mod market;
 mod models;
 
@@ -56,6 +57,12 @@ pub fn run() {
             commands::get_market_research_job,
             commands::cancel_market_research,
             commands::open_market_source,
+            history::list_quote_history,
+            history::get_quote_history,
+            history::save_quote_snapshot,
+            history::update_quote_admin,
+            history::duplicate_quote,
+            history::delete_quote_permanently,
             classification::classify_pricing_engine,
             classification::classify_market_source,
             classification::test_ollama,

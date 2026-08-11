@@ -194,10 +194,13 @@ async fn project_by_id(pool: &SqlitePool, project_id: &str) -> AppResult<Project
         .ok_or(AppError::NotFound)
 }
 
-async fn workspace(pool: &SqlitePool, project_id: &str) -> AppResult<Workspace> {
+pub(crate) async fn workspace(pool: &SqlitePool, project_id: &str) -> AppResult<Workspace> {
     let project = project_by_id(pool, project_id).await?;
     let quote = sqlx::query_as::<_, Quote>(
-        "SELECT id, project_id, version, status, currency, created_at, updated_at
+        "SELECT id, project_id, version, status, currency, notes, selected_price_kind,
+                selected_price_minor, floor_total_minor, recommended_total_minor,
+                premium_total_minor, snapshot_revision, saved_at, archived_at,
+                created_at, updated_at
          FROM quotes WHERE project_id = ? ORDER BY version DESC LIMIT 1",
     )
     .bind(project_id)
