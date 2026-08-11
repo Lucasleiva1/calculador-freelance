@@ -1,4 +1,5 @@
 import { convertMinor } from "./money";
+import type { EffortUnit } from "./effort";
 import type {
   Currency,
   PricingContext,
@@ -26,6 +27,9 @@ export interface VideoConfiguration {
   urgency: "normal" | "priority" | "48h" | "24h";
   urgencyFeeMinor: number;
   formats: Array<"16:9" | "9:16" | "1:1">;
+  effortAmount: number | null;
+  effortUnit: EffortUnit;
+  hoursPerDay: number;
   estimatedHours: number | null;
   color: "none" | "basic" | "look";
   audio: "basic" | "cleanup" | "music-effects" | "sound-design";
@@ -51,6 +55,9 @@ export const defaultVideoConfiguration = (): VideoConfiguration => ({
   urgency: "normal",
   urgencyFeeMinor: 0,
   formats: [],
+  effortAmount: null,
+  effortUnit: "hours",
+  hoursPerDay: 8,
   estimatedHours: null,
   color: "none",
   audio: "basic",
@@ -78,6 +85,8 @@ export function validateVideo(config: VideoConfiguration): string[] {
   if (config.rawMinutes != null && (!Number.isFinite(config.rawMinutes) || config.rawMinutes < 0)) issues.push("El material bruto no es válido.");
   if (config.finalDuration && parseDuration(config.finalDuration) == null) issues.push("Usá el formato MM:SS para la duración final.");
   if (config.estimatedHours != null && (!Number.isFinite(config.estimatedHours) || config.estimatedHours < 0)) issues.push("Las horas estimadas no son válidas.");
+  if (config.effortAmount != null && (!Number.isFinite(config.effortAmount) || config.effortAmount < 0)) issues.push("El tiempo estimado no es válido.");
+  if (!Number.isFinite(config.hoursPerDay) || config.hoursPerDay <= 0 || config.hoursPerDay > 24) issues.push("La jornada debe estar entre 1 y 24 horas.");
   if (!Number.isInteger(config.revisions) || config.revisions < 0) issues.push("Las revisiones no son válidas.");
   if (!Number.isInteger(config.additionalVersions) || config.additionalVersions < 0) issues.push("Las versiones adicionales no son válidas.");
   if (!Number.isFinite(config.urgencyFeeMinor) || config.urgencyFeeMinor < 0) issues.push("El importe de urgencia no es válido.");
@@ -169,7 +178,7 @@ export function parseVideoEnvelope(json: string): ServiceConfigurationEnvelope<V
   };
 }
 
-const presetEconomicKeys = new Set(["estimatedHours", "externalCosts", "urgencyFeeMinor"]);
+const presetEconomicKeys = new Set(["effortAmount", "effortUnit", "hoursPerDay", "estimatedHours", "externalCosts", "urgencyFeeMinor"]);
 
 export function applyVideoPreset(config: VideoConfiguration, presetJson: string): VideoConfiguration {
   const parsed = JSON.parse(presetJson) as Partial<VideoConfiguration>;

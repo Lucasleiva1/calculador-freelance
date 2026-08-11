@@ -35,6 +35,12 @@ pub fn extract_with_adapter(
         Some("tarifario") => Box::new(TarifarioAdapter),
         Some("yunojuno") => Box::new(YunoJunoAdapter),
         Some("remotejobs") => Box::new(RemoteJobsAdapter),
+        Some("remoteok") => Box::new(RemoteOkAdapter),
+        Some("upwork") => Box::new(UpworkAdapter),
+        Some("reelrate") => Box::new(ReelRateAdapter),
+        Some("indexdev") => Box::new(IndexDevAdapter),
+        Some("solopricing") => Box::new(SoloPricingAdapter),
+        Some("golance") => Box::new(GoLanceAdapter),
         Some("bcra") => Box::new(BcraAdapter),
         Some("generic") | None => Box::new(GenericAdapter),
         Some(_) => {
@@ -152,6 +158,89 @@ impl SourceAdapter for YunoJunoAdapter {
         final_url: &str,
     ) -> AppResult<Vec<ObservationDraft>> {
         let text = html_text(body);
+        let discipline = if context.service == "video-editing" {
+            "Creatives"
+        } else {
+            "Software Engineering"
+        };
+        let current_report = Regex::new(&format!(
+            r"(?i){}\s*£\s*([0-9][0-9,\.]*)\s*\$\s*([0-9][0-9,\.]*)",
+            regex::escape(discipline)
+        ))
+        .expect("current report regex");
+        if let Some(capture) = current_report.captures(&text) {
+            let gbp = capture
+                .get(1)
+                .and_then(|value| parse_localized_minor(value.as_str(), "GBP", "en-GB"));
+            let usd = capture
+                .get(2)
+                .and_then(|value| parse_localized_minor(value.as_str(), "USD", "en-US"));
+            let role = if context.service == "video-editing" {
+                "Profesionales creativos"
+            } else {
+                "Software Engineering"
+            };
+            let mut rows = Vec::new();
+            if let Some(value) = usd {
+                rows.push(ObservationDraft {
+                    service_type: context.service.clone(),
+                    subservice: Some(role.into()),
+                    category: Some(discipline.into()),
+                    region: "GLOBAL".into(),
+                    country: None,
+                    currency: "USD".into(),
+                    price_type: "HOURLY".into(),
+                    unit: "por hora".into(),
+                    price_min_minor: None,
+                    price_max_minor: None,
+                    price_value_minor: Some(value),
+                    original_value_text: format!("USD {} / hora", value as f64 / 100.0),
+                    experience_level: None,
+                    client_tier: None,
+                    source_url: final_url.into(),
+                    published_at: Some("2026-01-01".into()),
+                    confidence: "HIGH".into(),
+                    comparison_eligibility: "ELIGIBLE".into(),
+                    exclusion_reason: None,
+                    evidence_snippet: Some(format!(
+                        "YunoJuno 2026 · {discipline} · promedio USD {}/hora",
+                        value as f64 / 100.0
+                    )),
+                    notes: Some("Benchmark global basado en más de 182.000 datos de contratistas, reservas y tarifas de 2024–2025.".into()),
+                });
+            }
+            if let Some(value) = gbp {
+                rows.push(ObservationDraft {
+                    service_type: context.service.clone(),
+                    subservice: Some(role.into()),
+                    category: Some(discipline.into()),
+                    region: "INTERNATIONAL".into(),
+                    country: Some("United Kingdom".into()),
+                    currency: "GBP".into(),
+                    price_type: "DAILY".into(),
+                    unit: "por día".into(),
+                    price_min_minor: None,
+                    price_max_minor: None,
+                    price_value_minor: Some(value),
+                    original_value_text: format!("GBP {} / día", value as f64 / 100.0),
+                    experience_level: None,
+                    client_tier: None,
+                    source_url: final_url.into(),
+                    published_at: Some("2026-01-01".into()),
+                    confidence: "HIGH".into(),
+                    comparison_eligibility: "CONTEXT_ONLY".into(),
+                    exclusion_reason: Some("La tarifa diaria en GBP se conserva como contexto y no se convierte automáticamente a proyecto.".into()),
+                    evidence_snippet: Some(format!(
+                        "YunoJuno 2026 · {discipline} · promedio GBP {}/día",
+                        value as f64 / 100.0
+                    )),
+                    notes: None,
+                });
+            }
+            if !rows.is_empty() {
+                return Ok(rows);
+            }
+        }
         let role = if context.service == "video-editing" {
             "Video Editor"
         } else {
@@ -212,6 +301,433 @@ impl SourceAdapter for YunoJunoAdapter {
         result.sort_by_key(|item| (item.price_type.clone(), item.price_value_minor));
         result.dedup_by_key(|item| (item.price_type.clone(), item.price_value_minor));
         Ok(result)
+    }
+}
+
+struct UpworkAdapter;
+
+impl SourceAdapter for UpworkAdapter {
+    fn key(&self) -> &'static str {
+        "upwork"
+    }
+
+    fn extract(
+        &self,
+        body: &str,
+        _source: &MarketSource,
+        context: &MarketQueryContext,
+        final_url: &str,
+    ) -> AppResult<Vec<ObservationDraft>> {
+        let text = html_text(body);
+        let role = if context.service == "video-editing" {
+            "Video Editor"
+        } else {
+            "Software Developer"
+        };
+        let mut rows = Vec::new();
+        let overall = Regex::new(
+            r"(?i)cost\s*\$\s*([0-9][0-9,\.]*)\s*(?:-|–|—|to)\s*\$\s*([0-9][0-9,\.]*)\s*(?:/\s*hr|per\s+hour)",
+        )
+        .expect("upwork overall regex");
+        if let Some(capture) = overall.captures(&text) {
+            if let (Some(minimum), Some(maximum)) = (
+                capture
+                    .get(1)
+                    .and_then(|value| parse_localized_minor(value.as_str(), "USD", "en-US")),
+                capture
+                    .get(2)
+                    .and_then(|value| parse_localized_minor(value.as_str(), "USD", "en-US")),
+            ) {
+                rows.push(upwork_range(
+                    context,
+                    role,
+                    "Rango general",
+                    minimum,
+                    maximum,
+                    final_url,
+                ));
+            }
+        }
+        let tiers = Regex::new(
+            r"(?i)(entry(?:\s|-)?level|intermediate|expert)[^$]{0,100}\$\s*([0-9][0-9,\.]*)\s*(?:-|–|—|to)\s*\$?\s*([0-9][0-9,\.]*)(?:\+)?\s*(?:per\s+hour|/\s*hr)",
+        )
+        .expect("upwork tier regex");
+        for capture in tiers.captures_iter(&text) {
+            let (Some(minimum), Some(maximum)) = (
+                capture
+                    .get(2)
+                    .and_then(|value| parse_localized_minor(value.as_str(), "USD", "en-US")),
+                capture
+                    .get(3)
+                    .and_then(|value| parse_localized_minor(value.as_str(), "USD", "en-US")),
+            ) else {
+                continue;
+            };
+            let level = capture
+                .get(1)
+                .map(|value| value.as_str())
+                .unwrap_or("Nivel")
+                .replace('-', " ");
+            rows.push(upwork_range(
+                context, role, &level, minimum, maximum, final_url,
+            ));
+        }
+        rows.sort_by_key(|item| (item.experience_level.clone(), item.price_min_minor));
+        rows.dedup_by_key(|item| {
+            (
+                item.experience_level.clone(),
+                item.price_min_minor,
+                item.price_max_minor,
+            )
+        });
+        Ok(rows)
+    }
+}
+
+fn upwork_range(
+    context: &MarketQueryContext,
+    role: &str,
+    level: &str,
+    minimum: i64,
+    maximum: i64,
+    final_url: &str,
+) -> ObservationDraft {
+    ObservationDraft {
+        service_type: context.service.clone(),
+        subservice: Some(role.into()),
+        category: Some("Freelance marketplace".into()),
+        region: "GLOBAL".into(),
+        country: None,
+        currency: "USD".into(),
+        price_type: "HOURLY".into(),
+        unit: "por hora".into(),
+        price_min_minor: Some(minimum),
+        price_max_minor: Some(maximum),
+        price_value_minor: None,
+        original_value_text: format!(
+            "USD {}–{} / hora",
+            minimum as f64 / 100.0,
+            maximum as f64 / 100.0
+        ),
+        experience_level: Some(level.into()),
+        client_tier: None,
+        source_url: final_url.into(),
+        published_at: Some("2026-01-01".into()),
+        confidence: "HIGH".into(),
+        comparison_eligibility: "ELIGIBLE".into(),
+        exclusion_reason: None,
+        evidence_snippet: Some(format!(
+            "Upwork · {role} · {level}: USD {}–{} por hora",
+            minimum as f64 / 100.0,
+            maximum as f64 / 100.0
+        )),
+        notes: Some("Rango público de contratación; se usa como benchmark direccional y no reemplaza el cálculo interno.".into()),
+    }
+}
+
+struct ReelRateAdapter;
+
+impl SourceAdapter for ReelRateAdapter {
+    fn key(&self) -> &'static str {
+        "reelrate"
+    }
+
+    fn extract(
+        &self,
+        body: &str,
+        _source: &MarketSource,
+        context: &MarketQueryContext,
+        final_url: &str,
+    ) -> AppResult<Vec<ObservationDraft>> {
+        let text = html_text(body);
+        Ok(extract_named_hourly_ranges(
+            &text,
+            context,
+            final_url,
+            "Video Editor",
+            "ReelRate 2026",
+            "2026-08-01",
+            &[
+                (
+                    "Junior",
+                    r"(?i)Junior(?:\s*\([^)]*\))?\s*\$\s*([0-9]+)\s*(?:-|\x{2013}|\x{2014}|to)\s*\$?\s*([0-9]+)",
+                ),
+                (
+                    "Mid",
+                    r"(?i)Mid(?:-level)?(?:\s*\([^)]*\))?\s*\$\s*([0-9]+)\s*(?:-|\x{2013}|\x{2014}|to)\s*\$?\s*([0-9]+)",
+                ),
+                (
+                    "Senior",
+                    r"(?i)Senior(?:\s*\([^)]*\))?\s*\$\s*([0-9]+)\s*(?:-|\x{2013}|\x{2014}|to)\s*\$?\s*([0-9]+)",
+                ),
+            ],
+        ))
+    }
+}
+
+struct IndexDevAdapter;
+
+impl SourceAdapter for IndexDevAdapter {
+    fn key(&self) -> &'static str {
+        "indexdev"
+    }
+
+    fn extract(
+        &self,
+        body: &str,
+        _source: &MarketSource,
+        context: &MarketQueryContext,
+        final_url: &str,
+    ) -> AppResult<Vec<ObservationDraft>> {
+        let text = html_text(body);
+        Ok(extract_named_hourly_ranges(
+            &text,
+            context,
+            final_url,
+            "Software Developer",
+            "Index.dev 2026",
+            "2026-06-01",
+            &[
+                (
+                    "Entry-level",
+                    r"(?i)Entry-Level Software Developers.{0,180}?\$\s*([0-9]+)\s*(?:-|\x{2013}|\x{2014}|to)\s*\$?\s*([0-9]+)\s*/?hr",
+                ),
+                (
+                    "Mid-level",
+                    r"(?i)Mid-Level Software Developers.{0,180}?\$\s*([0-9]+)\s*(?:-|\x{2013}|\x{2014}|to)\s*\$?\s*([0-9]+)\s*/?hr",
+                ),
+                (
+                    "Senior",
+                    r"(?i)Senior Software Developers.{0,180}?\$\s*([0-9]+)\s*(?:-|\x{2013}|\x{2014}|to)\s*\$?\s*([0-9]+)\s*/?hr",
+                ),
+            ],
+        ))
+    }
+}
+
+struct SoloPricingAdapter;
+
+impl SourceAdapter for SoloPricingAdapter {
+    fn key(&self) -> &'static str {
+        "solopricing"
+    }
+
+    fn extract(
+        &self,
+        body: &str,
+        _source: &MarketSource,
+        context: &MarketQueryContext,
+        final_url: &str,
+    ) -> AppResult<Vec<ObservationDraft>> {
+        let text = html_text(body);
+        Ok(extract_named_hourly_ranges(
+            &text,
+            context,
+            final_url,
+            "Video Editor",
+            "SoloPricing 2026",
+            "2026-03-10",
+            &[
+                (
+                    "Entry-level",
+                    r"(?i)Entry-level editors.{0,80}?\$\s*([0-9]+)\s*(?:-|\x{2013}|\x{2014}|to)\s*\$?\s*([0-9]+)\s*/?hr",
+                ),
+                (
+                    "Mid-level",
+                    r"(?i)Mid-level editors.{0,100}?\$\s*([0-9]+)\s*(?:-|\x{2013}|\x{2014}|to)\s*\$?\s*([0-9]+)\s*/?hr",
+                ),
+                (
+                    "Senior",
+                    r"(?i)Senior editors.{0,120}?\$\s*([0-9]+)\s*(?:-|\x{2013}|\x{2014}|to)\s*\$?\s*([0-9]+)\s*/?hr",
+                ),
+            ],
+        ))
+    }
+}
+
+struct GoLanceAdapter;
+
+impl SourceAdapter for GoLanceAdapter {
+    fn key(&self) -> &'static str {
+        "golance"
+    }
+
+    fn extract(
+        &self,
+        body: &str,
+        _source: &MarketSource,
+        context: &MarketQueryContext,
+        final_url: &str,
+    ) -> AppResult<Vec<ObservationDraft>> {
+        let text = html_text(body);
+        Ok(extract_named_hourly_ranges(
+            &text,
+            context,
+            final_url,
+            "Software Developer",
+            "goLance 2026",
+            "2026-01-01",
+            &[
+                (
+                    "Junior",
+                    r"(?i)Junior\s*\$\s*([0-9]+)\s*(?:-|\x{2013}|\x{2014}|to)\s*\$?\s*([0-9]+)\s*/hr",
+                ),
+                (
+                    "Mid-level",
+                    r"(?i)Mid-Level\s*\$\s*([0-9]+)\s*(?:-|\x{2013}|\x{2014}|to)\s*\$?\s*([0-9]+)\s*/hr",
+                ),
+                (
+                    "Senior",
+                    r"(?i)Senior\s*\$\s*([0-9]+)\s*(?:-|\x{2013}|\x{2014}|to)\s*\$?\s*([0-9]+)\s*/hr",
+                ),
+                (
+                    "Expert",
+                    r"(?i)Expert\s*\$\s*([0-9]+)\s*(?:-|\x{2013}|\x{2014}|to)\s*\$?\s*([0-9]+)\s*/hr",
+                ),
+            ],
+        ))
+    }
+}
+
+fn extract_named_hourly_ranges(
+    text: &str,
+    context: &MarketQueryContext,
+    final_url: &str,
+    role: &str,
+    benchmark: &str,
+    published_at: &str,
+    patterns: &[(&str, &str)],
+) -> Vec<ObservationDraft> {
+    let mut rows = Vec::new();
+    for (level, pattern) in patterns {
+        let regex = Regex::new(pattern).expect("benchmark range regex");
+        let Some(capture) = regex.captures(text) else {
+            continue;
+        };
+        let (Some(minimum), Some(maximum)) = (
+            capture
+                .get(1)
+                .and_then(|value| parse_localized_minor(value.as_str(), "USD", "en-US")),
+            capture
+                .get(2)
+                .and_then(|value| parse_localized_minor(value.as_str(), "USD", "en-US")),
+        ) else {
+            continue;
+        };
+        let mut row = upwork_range(context, role, level, minimum, maximum, final_url);
+        row.category = Some(benchmark.into());
+        row.published_at = Some(published_at.into());
+        row.evidence_snippet = Some(format!(
+            "{benchmark} | {role} | {level}: USD {}-{} por hora",
+            minimum as f64 / 100.0,
+            maximum as f64 / 100.0
+        ));
+        row.notes = Some("Benchmark publico por experiencia; se combina con el calculo sostenible y nunca cambia el precio final sin confirmacion.".into());
+        rows.push(row);
+    }
+    rows
+}
+
+struct RemoteOkAdapter;
+
+impl SourceAdapter for RemoteOkAdapter {
+    fn key(&self) -> &'static str {
+        "remoteok"
+    }
+
+    fn extract(
+        &self,
+        body: &str,
+        _source: &MarketSource,
+        context: &MarketQueryContext,
+        final_url: &str,
+    ) -> AppResult<Vec<ObservationDraft>> {
+        let values = serde_json::from_str::<Vec<Value>>(body)?;
+        let programming_terms = [
+            "developer",
+            "software",
+            "engineer",
+            "frontend",
+            "front-end",
+            "backend",
+            "back-end",
+            "full stack",
+            "full-stack",
+            "javascript",
+            "typescript",
+            "python",
+            "rust",
+            "devops",
+            "cloud",
+        ];
+        let video_terms = ["video", "editor", "motion", "animation", "post-production"];
+        let terms = if context.service == "video-editing" {
+            &video_terms[..]
+        } else {
+            &programming_terms[..]
+        };
+        let mut rows = Vec::new();
+        for item in values.into_iter().skip(1) {
+            let position = item
+                .get("position")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let tags = item
+                .get("tags")
+                .and_then(Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                })
+                .unwrap_or_default();
+            let searchable = format!("{position} {tags}").to_lowercase();
+            if !terms.iter().any(|term| searchable.contains(term)) {
+                continue;
+            }
+            let minimum = item.get("salary_min").and_then(Value::as_i64).unwrap_or(0);
+            let maximum = item.get("salary_max").and_then(Value::as_i64).unwrap_or(0);
+            if minimum <= 0 || maximum <= 0 || maximum < minimum {
+                continue;
+            }
+            let source_url = item.get("url").and_then(Value::as_str).unwrap_or(final_url);
+            rows.push(ObservationDraft {
+                service_type: context.service.clone(),
+                subservice: Some(position.into()),
+                category: Some("Remote job".into()),
+                region: "GLOBAL".into(),
+                country: item
+                    .get("location")
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.trim().is_empty())
+                    .map(str::to_string),
+                currency: "USD".into(),
+                price_type: "ANNUAL_SALARY".into(),
+                unit: "por año".into(),
+                price_min_minor: Some(minimum.saturating_mul(100)),
+                price_max_minor: Some(maximum.saturating_mul(100)),
+                price_value_minor: None,
+                original_value_text: format!("USD {minimum}–{maximum} / año"),
+                experience_level: None,
+                client_tier: None,
+                source_url: source_url.into(),
+                published_at: item
+                    .get("date")
+                    .and_then(Value::as_str)
+                    .map(|date| date.chars().take(10).collect()),
+                confidence: "MEDIUM".into(),
+                comparison_eligibility: "CONTEXT_ONLY".into(),
+                exclusion_reason: Some("Es salario publicado para empleo remoto, no una tarifa freelance.".into()),
+                evidence_snippet: Some(format!("Remote OK · {position} · USD {minimum}–{maximum}/año")),
+                notes: Some("Remote OK exige atribución y enlace; la observación conserva el enlace al aviso original.".into()),
+            });
+            if rows.len() >= 30 {
+                break;
+            }
+        }
+        Ok(rows)
     }
 }
 
@@ -514,6 +1030,131 @@ mod tests {
     }
 
     #[test]
+    fn yunojuno_2026_report_extracts_current_creative_benchmark() {
+        let html = "<main><div>Creatives</div><div>£417</div><div>$69</div></main>";
+        let rows = YunoJunoAdapter
+            .extract(
+                html,
+                &source("yunojuno"),
+                &MarketQueryContext::generic("video-editing".into(), vec!["GLOBAL".into()]),
+                "https://www.yunojuno.com/freelancer-rates-report",
+            )
+            .unwrap();
+        assert!(rows.iter().any(|item| item.price_type == "HOURLY"
+            && item.currency == "USD"
+            && item.price_value_minor == Some(6_900)
+            && item.comparison_eligibility == "ELIGIBLE"));
+        assert!(rows.iter().any(|item| item.price_type == "DAILY"
+            && item.currency == "GBP"
+            && item.comparison_eligibility == "CONTEXT_ONLY"));
+    }
+
+    #[test]
+    fn upwork_extracts_hourly_ranges_by_experience() {
+        let html = r#"<main>Video Editors cost $10-$60 / hr.
+            Entry-level $15-$30 per hour. Intermediate $30-$60 per hour.
+            Expert $60-$150+ per hour.</main>"#;
+        let rows = UpworkAdapter
+            .extract(
+                html,
+                &source("upwork"),
+                &MarketQueryContext::generic("video-editing".into(), vec!["GLOBAL".into()]),
+                "https://www.upwork.com/hire/video-editors/cost/",
+            )
+            .unwrap();
+        assert_eq!(rows.len(), 4);
+        assert!(rows.iter().all(|item| item.price_type == "HOURLY"
+            && item.currency == "USD"
+            && item.comparison_eligibility == "ELIGIBLE"));
+        assert!(
+            rows.iter()
+                .any(|item| item.price_min_minor == Some(1_000)
+                    && item.price_max_minor == Some(6_000))
+        );
+    }
+
+    #[test]
+    fn remote_ok_salary_never_becomes_a_freelance_comparable() {
+        let body = r#"[{"legal":"Remote OK"},{"position":"Senior Rust Developer","tags":["rust"],"salary_min":90000,"salary_max":140000,"date":"2026-08-10T00:00:00Z","location":"Worldwide","url":"https://remoteok.com/remote-jobs/1"}]"#;
+        let rows = RemoteOkAdapter
+            .extract(
+                body,
+                &source("remoteok"),
+                &MarketQueryContext::generic("programming".into(), vec!["GLOBAL".into()]),
+                "https://remoteok.com/api",
+            )
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].price_type, "ANNUAL_SALARY");
+        assert_eq!(rows[0].comparison_eligibility, "CONTEXT_ONLY");
+        assert_eq!(rows[0].price_min_minor, Some(9_000_000));
+    }
+
+    #[test]
+    fn reelrate_extracts_video_experience_bands() {
+        let html = "Junior (0–2 years) $25–$45 Mid (2–5 years) $45–$85 Senior (5+ years) $85–$150";
+        let rows = ReelRateAdapter
+            .extract(
+                html,
+                &source("reelrate"),
+                &MarketQueryContext::generic("video-editing".into(), vec!["GLOBAL".into()]),
+                "https://reel-rate.com/",
+            )
+            .unwrap();
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].price_min_minor, Some(2_500));
+        assert_eq!(rows[2].price_max_minor, Some(15_000));
+    }
+
+    #[test]
+    fn indexdev_extracts_software_experience_bands() {
+        let html = "Entry-Level Software Developers Fresh out of uni. Typical rate: $50-70/hr Mid-Level Software Developers 3-7 years. Typical rate: $70-100/hr Senior Software Developers 7+ years. Typical rate: $100-160/hr";
+        let rows = IndexDevAdapter
+            .extract(
+                html,
+                &source("indexdev"),
+                &MarketQueryContext::generic("programming".into(), vec!["GLOBAL".into()]),
+                "https://www.index.dev/blog/freelance-developer-rates",
+            )
+            .unwrap();
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].price_min_minor, Some(5_000));
+        assert_eq!(rows[2].price_max_minor, Some(16_000));
+    }
+
+    #[test]
+    fn solopricing_extracts_current_video_ranges() {
+        let html = "Entry-level editors (0-2 years) charge $50-$75/hr. Mid-level editors (3-5 years) charge $75-$125/hr. Senior editors charge $125-$175/hr.";
+        let rows = SoloPricingAdapter
+            .extract(
+                html,
+                &source("solopricing"),
+                &MarketQueryContext::generic("video-editing".into(), vec!["GLOBAL".into()]),
+                "https://www.solopricing.com/video-editor-rates-2026",
+            )
+            .unwrap();
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].price_min_minor, Some(5_000));
+        assert_eq!(rows[2].price_max_minor, Some(17_500));
+    }
+
+    #[test]
+    fn golance_extracts_current_software_ranges() {
+        let html = "Junior $25-$50/hr Mid-Level $50-$95/hr Senior $95-$160/hr Expert $160-$275/hr";
+        let rows = GoLanceAdapter
+            .extract(
+                html,
+                &source("golance"),
+                &MarketQueryContext::generic("programming".into(), vec!["GLOBAL".into()]),
+                "https://golance.com/hiring/best-freelance-software-developers-hourly-rate",
+            )
+            .unwrap();
+        assert_eq!(rows.len(), 4);
+        assert_eq!(rows[0].price_min_minor, Some(2_500));
+        assert_eq!(rows[3].price_max_minor, Some(27_500));
+    }
+
+    #[test]
     fn remote_jobs_salary_stays_context_only() {
         let html = include_str!("fixtures/remotejobs.html");
         let rows = RemoteJobsAdapter
@@ -556,15 +1197,22 @@ mod tests {
                     "https://api.bcra.gob.ar/estadisticascambiarias/v1.0/Cotizaciones",
                     "currency",
                 ),
+                ("remoteok", "https://remoteok.com/api", "programming"),
+                ("reelrate", "https://reel-rate.com/", "video-editing"),
                 (
-                    "remotejobs",
-                    "https://remotejobs.lat/tools/calculadora-salario-remoto-latam",
+                    "solopricing",
+                    "https://www.solopricing.com/video-editor-rates-2026",
+                    "video-editing",
+                ),
+                (
+                    "indexdev",
+                    "https://www.index.dev/blog/freelance-developer-rates",
                     "programming",
                 ),
                 (
-                    "yunojuno",
-                    "https://www.yunojuno.com/blogs/day-rates-update-film-motion",
-                    "video-editing",
+                    "golance",
+                    "https://golance.com/hiring/best-freelance-software-developers-hourly-rate",
+                    "programming",
                 ),
             ];
             for (adapter, url, service) in cases {

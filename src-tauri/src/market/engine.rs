@@ -290,6 +290,21 @@ fn converted_midpoint(
     }
 }
 
+fn source_request_url(source: &MarketSource, context: &MarketQueryContext) -> AppResult<String> {
+    if source.adapter_key.as_deref() == Some("upwork") {
+        return Ok(if context.service == "video-editing" {
+            "https://www.upwork.com/hire/video-editors/cost/"
+        } else {
+            "https://www.upwork.com/hire/software-developers/cost/"
+        }
+        .into());
+    }
+    source
+        .base_url
+        .clone()
+        .ok_or_else(|| AppError::Validation("La fuente no tiene URL base.".into()))
+}
+
 async fn process_source(
     pool: &SqlitePool,
     client: &Client,
@@ -316,11 +331,8 @@ async fn process_source(
         };
         return Ok(preview(&source.id, "MANUAL", message.into(), None, vec![]));
     }
-    let url = source
-        .base_url
-        .as_deref()
-        .ok_or_else(|| AppError::Validation("La fuente no tiene URL base.".into()))?;
-    validate_public_https(url)?;
+    let url = source_request_url(source, context)?;
+    validate_public_https(&url)?;
     if source.acquisition_mode == "auto_browser" {
         return Ok(preview(
             &source.id,
@@ -353,7 +365,7 @@ async fn process_source(
         record_log(
             pool,
             source,
-            url,
+            &url,
             &started,
             FetchLogOutcome {
                 status: "CACHED",
@@ -383,18 +395,18 @@ async fn process_source(
     let timer = Instant::now();
     sqlx::query("UPDATE market_sources SET current_status='FETCHING', last_request_at=?, updated_at=? WHERE id=?")
         .bind(&started_at).bind(&started_at).bind(&source.id).execute(pool).await?;
-    let response = match fetch_once(client, url).await {
+    let response = match fetch_once(client, &url).await {
         Ok(response) => response,
         Err(first_error) => {
             tokio::time::sleep(std::time::Duration::from_millis(250)).await;
-            match fetch_once(client, url).await {
+            match fetch_once(client, &url).await {
                 Ok(response) => response,
                 Err(_) => {
                     let message = first_error.to_string();
                     record_log(
                         pool,
                         source,
-                        url,
+                        &url,
                         &started_at,
                         FetchLogOutcome {
                             status: "ERROR",
@@ -1427,7 +1439,7 @@ mod tests {
     }
 
     #[test]
-    fn catalog_migration_keeps_only_bcra_automatic_and_never_restores_tarifario_url() {
+    fn catalog_migration_enables_verified_live_sources_and_never_restores_tarifario_url() {
         tauri::async_runtime::block_on(async {
             let options = SqliteConnectOptions::from_str("sqlite::memory:")
                 .expect("valid sqlite options")
@@ -1466,6 +1478,24 @@ mod tests {
             assert_eq!(bcra.2, "APPROVED");
             assert!(!bcra.3);
             assert_eq!(bcra.4, "bcra");
+
+            let automatic: Vec<(String, bool)> = sqlx::query_as(
+                "SELECT system_key,participates_in_suggestions FROM market_sources WHERE acquisition_mode='auto_http' AND automation_status='APPROVED' ORDER BY system_key",
+            )
+            .fetch_all(&pool)
+            .await
+            .expect("automatic sources");
+            assert_eq!(
+                automatic,
+                vec![
+                    ("bcra".into(), false),
+                    ("golance".into(), true),
+                    ("indexdev".into(), true),
+                    ("reelrate".into(), true),
+                    ("remoteok".into(), false),
+                    ("solopricing".into(), true),
+                ]
+            );
         });
     }
 }

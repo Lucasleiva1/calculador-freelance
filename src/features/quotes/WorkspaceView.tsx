@@ -95,7 +95,7 @@ export function WorkspaceView({
   onCancelMarket: () => Promise<void>;
   onSaveQuote: () => Promise<void>;
   /** Recalcula y persiste el estimado actual antes de mostrarlo. */
-  onCalculateEstimate?: () => Promise<void> | void;
+  onCalculateEstimate?: (automatic: boolean) => Promise<void> | void;
   /** Lleva a la configuración de economía/tarifa requerida por el cálculo. */
   onConfigureEconomy?: () => void;
   calculationBusy?: boolean;
@@ -108,6 +108,7 @@ export function WorkspaceView({
 }) {
   const [addOpen, setAddOpen] = useState(false);
   const [localCalculationBusy, setLocalCalculationBusy] = useState(false);
+  const [calculationMode, setCalculationMode] = useState<"automatic" | "manual">("automatic");
   useEffect(() => {
     if (!activeServiceId && workspace.services[0]) onActiveService(workspace.services[0].id);
   }, [activeServiceId, onActiveService, workspace.services]);
@@ -148,7 +149,7 @@ export function WorkspaceView({
     if (!active || isMarketUpdating || calculating) return;
     setLocalCalculationBusy(true);
     try {
-      await onCalculateEstimate?.();
+      await onCalculateEstimate?.(calculationMode === "automatic");
     } finally {
       setLocalCalculationBusy(false);
       window.setTimeout(revealEstimate, 0);
@@ -177,7 +178,8 @@ export function WorkspaceView({
           {activeStatus === "error" && <div className="save-error" role="alert">{errors[active.id]}</div>}
           <section className={`estimate-callout ${activeIsReady ? "estimate-callout--ready" : "estimate-callout--incomplete"}`} aria-live="polite">
             <div className="estimate-callout__status">{activeIsReady ? <CircleCheck size={20} aria-hidden="true" /> : <CircleAlert size={20} aria-hidden="true" />}<div><span className="eyebrow">{activeIsReady ? "Estimado actualizado" : "Estimado pendiente"}</span><strong>{activeIsReady ? formatMoney(activeResult?.finalSubtotalMinor ?? null, workspace.quote.currency) : "Completá los requisitos para ver el precio"}</strong><p>{activeIsReady ? "El cálculo se actualiza cuando cambiás los parámetros de este módulo." : "No se inventa ningún importe: revisá lo que falta y volvé a calcular."}</p></div></div>
-            <div className="estimate-callout__actions"><Button type="button" variant={activeIsReady ? "default" : "accent"} onClick={() => void calculateAndReveal()} disabled={calculating || isMarketUpdating}><Calculator size={16} /> {calculating ? "Calculando…" : activeIsReady ? "Ver estimado" : "Calcular estimado"}</Button>{requiresEconomy && onConfigureEconomy && <Button type="button" variant="ghost" onClick={onConfigureEconomy}><Settings2 size={16} /> Configurar tarifa</Button>}</div>
+            <div className="calculation-mode" role="group" aria-label="Modo de cálculo"><button type="button" className={calculationMode === "automatic" ? "is-active" : ""} aria-pressed={calculationMode === "automatic"} onClick={() => setCalculationMode("automatic")} disabled={calculating || isMarketUpdating}><strong>Automático</strong><small>Tu economía + fuentes actuales</small></button><button type="button" className={calculationMode === "manual" ? "is-active" : ""} aria-pressed={calculationMode === "manual"} onClick={() => setCalculationMode("manual")} disabled={calculating || isMarketUpdating}><strong>Manual</strong><small>Sólo los datos que cargaste</small></button></div>
+            <div className="estimate-callout__actions"><Button type="button" variant={activeIsReady ? "default" : "accent"} onClick={() => void calculateAndReveal()} disabled={calculating || isMarketUpdating}><Calculator size={16} /> {calculating ? "Calculando…" : calculationMode === "automatic" ? "Calcular y actualizar fuentes" : "Calcular con mis datos"}</Button>{requiresEconomy && onConfigureEconomy && <Button type="button" variant="ghost" onClick={onConfigureEconomy}><Settings2 size={16} /> Configurar tarifa</Button>}</div>
             {!activeIsReady && activeIssues.length > 0 && <ul className="estimate-callout__requirements">{activeIssues.slice(0, 3).map((issue) => <li key={issue}>{issue}</li>)}</ul>}
           </section>
           {isMarketUpdating && <p id="market-update-lock" className="market-update-lock" role="status"><CircleAlert size={17} aria-hidden="true" /> Actualizando la referencia de mercado. Tus parámetros quedan bloqueados para conservar exactamente los valores que cargaste.</p>}
@@ -190,6 +192,6 @@ export function WorkspaceView({
       </div>
     </main>
     <ResultInspector key={activeServiceId ?? "empty"} result={result} currency={workspace.quote.currency} activeServiceId={activeServiceId} suggestionsEnabled={settings.suggestionsEnabled} market={market} marketJob={marketJob} onUpdateMarket={onUpdateMarket} onCancelMarket={onCancelMarket} onConfigureEconomy={onConfigureEconomy} onFinalPriceChange={active ? (final, reason) => onFinalPriceChange(active, final, reason) : undefined} />
-    <footer className="actionbar"><div className="actionbar__summary"><FileOutput size={20} /><span>Resumen del proyecto</span><i /><strong>{workspace.services.length} {workspace.services.length === 1 ? "módulo" : "módulos"}</strong><StatusDot /><i /><span>{result.isPartial ? "Subtotal parcial" : "Total"}</span><b>{formatMoney(result.totalMinor, workspace.quote.currency)}</b></div><div className="actionbar__actions"><Button onClick={() => void onSaveQuote()}>{workspace.quote.snapshotRevision > 0 ? "Guardar revisión" : "Guardar cotización"}</Button><Button type="button" variant={activeIsReady ? "default" : "accent"} onClick={() => void calculateAndReveal()} disabled={!active || calculating || isMarketUpdating}><Calculator size={16} /> {calculating ? "Calculando…" : activeIsReady ? "Ver estimado" : "Calcular estimado"}</Button><Button type="button" variant="accent" onClick={() => void onGenerateDocument?.()} disabled={!projectReadyForDocument || !onGenerateDocument || documentBusy || isMarketUpdating} title={!projectReadyForDocument ? "Completá todos los módulos antes de preparar el presupuesto." : undefined}><FileText size={16} /> {documentBusy ? "Preparando…" : documentReady ? "Abrir presupuesto / PDF" : "Generar presupuesto / PDF"}</Button></div></footer>
+    <footer className="actionbar"><div className="actionbar__summary"><FileOutput size={20} /><span>Resumen del proyecto</span><i /><strong>{workspace.services.length} {workspace.services.length === 1 ? "módulo" : "módulos"}</strong><StatusDot /><i /><span>{result.isPartial ? "Subtotal parcial" : "Total"}</span><b>{formatMoney(result.totalMinor, workspace.quote.currency)}</b></div><div className="actionbar__actions"><Button onClick={() => void onSaveQuote()}>{workspace.quote.snapshotRevision > 0 ? "Guardar revisión" : "Guardar cotización"}</Button><Button type="button" variant={activeIsReady ? "default" : "accent"} onClick={() => void calculateAndReveal()} disabled={!active || calculating || isMarketUpdating}><Calculator size={16} /> {calculating ? "Calculando…" : calculationMode === "automatic" ? "Calcular automático" : "Calcular manual"}</Button><Button type="button" variant="accent" onClick={() => void onGenerateDocument?.()} disabled={!projectReadyForDocument || !onGenerateDocument || documentBusy || isMarketUpdating} title={!projectReadyForDocument ? "Completá todos los módulos antes de preparar el presupuesto." : undefined}><FileText size={16} /> {documentBusy ? "Preparando…" : documentReady ? "Abrir presupuesto / PDF" : "Generar presupuesto / PDF"}</Button></div></footer>
   </div>;
 }

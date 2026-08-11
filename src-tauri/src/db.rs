@@ -115,23 +115,35 @@ mod tests {
             .fetch_one(&pool)
             .await
             .expect("automatic sources");
-            // El catálogo sólo automatiza BCRA para la conversión USD/ARS. Las
-            // demás referencias requieren carga manual verificable para no
-            // simular una fuente de precios ni infringir sus condiciones.
-            assert_eq!(automatic_sources, 1);
-            let automatic_key: String = sqlx::query_scalar(
-                "SELECT system_key FROM market_sources WHERE acquisition_mode='auto_http' AND automation_status='APPROVED'",
+            // BCRA aporta cambio; ReelRate, SoloPricing, Index.dev y goLance
+            // aportan benchmarks; Remote OK aporta contexto salarial separado.
+            assert_eq!(automatic_sources, 6);
+            let automatic_keys: Vec<String> = sqlx::query_scalar(
+                "SELECT system_key FROM market_sources WHERE acquisition_mode='auto_http' AND automation_status='APPROVED' ORDER BY system_key",
             )
-            .fetch_one(&pool)
+            .fetch_all(&pool)
             .await
-            .expect("BCRA automatic source");
-            assert_eq!(automatic_key, "bcra");
+            .expect("automatic sources");
+            assert_eq!(
+                automatic_keys,
+                vec![
+                    "bcra",
+                    "golance",
+                    "indexdev",
+                    "reelrate",
+                    "remoteok",
+                    "solopricing"
+                ]
+            );
             let (upwork_url, upwork_status, upwork_automation): (String, String, String) =
                 sqlx::query_as("SELECT base_url, current_status, automation_status FROM market_sources WHERE system_key='upwork'")
                     .fetch_one(&pool).await.expect("upwork");
-            assert_eq!(upwork_url, "https://www.upwork.com/");
-            assert_eq!(upwork_status, "DISABLED");
-            assert_eq!(upwork_automation, "MANUAL_ONLY");
+            assert_eq!(
+                upwork_url,
+                "https://www.upwork.com/hire/video-editors/cost/"
+            );
+            assert_eq!(upwork_status, "BLOCKED");
+            assert_eq!(upwork_automation, "BLOCKED");
 
             let client = uuid::Uuid::new_v4().to_string();
             sqlx::query("INSERT INTO clients (id, name, status, created_at, updated_at) VALUES (?, 'ACME', 'active', 'now', 'now')")
@@ -204,7 +216,26 @@ mod tests {
             .expect("shared many-to-many source");
             assert_eq!(shared_source_count, 2);
             reopened.close().await;
-            std::fs::remove_file(path).expect("remove test database");
+            let mut removed = false;
+            for _ in 0..10 {
+                match std::fs::remove_file(&path) {
+                    Ok(()) => {
+                        removed = true;
+                        break;
+                    }
+                    Err(error)
+                        if error.kind() == std::io::ErrorKind::PermissionDenied
+                            || error.raw_os_error() == Some(32) =>
+                    {
+                        std::thread::sleep(std::time::Duration::from_millis(20));
+                    }
+                    Err(error) => panic!("remove test database: {error}"),
+                }
+            }
+            assert!(
+                removed,
+                "remove test database after closing every connection"
+            );
         });
     }
 

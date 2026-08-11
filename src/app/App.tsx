@@ -16,9 +16,10 @@ import type {
   PricingConfiguration,
   MarketOverview,
   MarketResearchJob,
+  SaveServiceInput,
 } from "../domain/types";
-import type { VideoConfiguration } from "../domain/video";
-import type { ProgrammingConfiguration } from "../domain/programming";
+import { parseVideoEnvelope, type VideoConfiguration } from "../domain/video";
+import { parseProgrammingEnvelope, type ProgrammingConfiguration } from "../domain/programming";
 import type { HybridConfiguration, ProductConfiguration } from "../domain/product";
 import { calculateHybrid, calculateProduct } from "../domain/product";
 import { evaluateWorkspace } from "../domain/quote";
@@ -39,7 +40,7 @@ import { QuotesHistoryView } from "../features/quotes/QuotesHistoryView";
 import { ClientDocumentModal } from "../features/quotes/ClientDocumentModal";
 
 function presetConfiguration(config: VideoConfiguration) {
-  return JSON.stringify(Object.fromEntries(Object.entries(config).filter(([key]) => !["estimatedHours", "externalCosts", "urgencyFeeMinor"].includes(key))));
+  return JSON.stringify(Object.fromEntries(Object.entries(config).filter(([key]) => !["effortAmount", "effortUnit", "hoursPerDay", "estimatedHours", "externalCosts", "urgencyFeeMinor"].includes(key))));
 }
 
 export function App() {
@@ -77,7 +78,7 @@ export function App() {
       event.preventDefault();
       if (await flushAutosave()) {
         closeAllowed.current = true;
-        await getCurrentWindow().destroy();
+        await getCurrentWindow().close();
       } else {
         setNotice("No se pudo guardar todo. Reintentá antes de cerrar para no perder cambios.");
       }
@@ -285,7 +286,54 @@ export function App() {
     setNotice("");
   }
 
-  async function calculateEstimate() {
+  function recalculationInput(service: QuoteService, currentWorkspace: Workspace): SaveServiceInput {
+    if (!data) throw new Error("La configuración de precios no está disponible.");
+    const engine = data.pricing.pricingEngines.find((item) => item.engineKey === service.serviceType);
+    if (engine && ["physical-product-v1", "hybrid-v1"].includes(engine.calculatorKey)) {
+      const config = (JSON.parse(service.configurationJson) as ServiceConfigurationEnvelope<ProductConfiguration | HybridConfiguration>).data;
+      const profile = data.pricing.economicProfiles.find((item) => item.currency === currentWorkspace.quote.currency) ?? null;
+      const context = { currency: currentWorkspace.quote.currency, hourlyRateMinor: activeHourlyRate(profile), usdToArsMicros: data.settings.usdToArsMicros };
+      let result = engine.calculatorKey === "hybrid-v1" ? calculateHybrid(config as HybridConfiguration, context) : calculateProduct(config, context);
+      if (service.hasOverride && service.manualSubtotalMinor != null) {
+        result = { ...result, finalSubtotalMinor: service.manualSubtotalMinor, effectiveSubtotalMinor: service.manualSubtotalMinor, hasOverride: true, lines: [...result.lines, { label: "Precio final manual", kind: "override", amountMinor: service.manualSubtotalMinor - (result.suggestedSubtotalMinor ?? result.calculatedSubtotalMinor ?? 0) }] };
+      }
+      return {
+        id: service.id, title: service.title, configurationVersion: service.configurationVersion,
+        configurationJson: service.configurationJson, calculatedSubtotalMinor: result.calculatedSubtotalMinor,
+        suggestedSubtotalMinor: result.suggestedSubtotalMinor, finalSubtotalMinor: result.finalSubtotalMinor,
+        hasOverride: service.hasOverride, manualSubtotalMinor: service.manualSubtotalMinor, manualReason: service.manualReason,
+        pricingSnapshotJson: JSON.stringify({ schemaVersion: 1, createdAt: new Date().toISOString(), engineId: engine.id, result }),
+        serviceDefinitionVersion: engine.classificationVersion, expectedRevision: service.rowRevision,
+      };
+    }
+
+    const config = service.serviceType === "video-editing"
+      ? parseVideoEnvelope(service.configurationJson).data
+      : parseProgrammingEnvelope(service.configurationJson).data;
+    const parameterValues = service.serviceType === "video-editing"
+      ? config as unknown as Record<string, unknown>
+      : (config as ProgrammingConfiguration).parameterValues;
+    const externalCosts = (config as VideoConfiguration | ProgrammingConfiguration).externalCosts;
+    const engineInput = {
+      serviceType: service.serviceType, currency: currentWorkspace.quote.currency, parameterValues, externalCosts,
+      fixedUrgencyMinor: service.serviceType === "video-editing" ? (config as VideoConfiguration).urgencyFeeMinor : undefined,
+      finalOverrideMinor: service.manualSubtotalMinor, hasOverride: service.hasOverride,
+      settings: data.settings, pricing: data.pricing,
+    };
+    const result = runPricingEngine(engineInput);
+    const snapshot = createPricingSnapshot(engineInput, result);
+    const definition = data.pricing.definitions.find((item) => item.serviceType === service.serviceType);
+    return {
+      id: service.id, title: service.title, configurationVersion: service.configurationVersion,
+      configurationJson: service.configurationJson, calculatedSubtotalMinor: result.calculatedSubtotalMinor,
+      suggestedSubtotalMinor: result.suggestedSubtotalMinor, finalSubtotalMinor: result.finalSubtotalMinor,
+      hasOverride: service.hasOverride, manualSubtotalMinor: service.manualSubtotalMinor, manualReason: service.manualReason,
+      pricingSnapshotJson: snapshot ? JSON.stringify(snapshot) : null,
+      serviceDefinitionVersion: definition?.version ?? null, expectedRevision: service.rowRevision,
+    };
+  }
+
+  async function calculateEstimate(automatic = true) {
     if (!workspace || !data || calculationBusy) return;
     setCalculationBusy(true);
     try {
@@ -293,11 +341,18 @@ export function App() {
         setNotice("No se pudieron guardar los cambios antes de calcular. Corregí el error indicado y reintentá.");
         return;
       }
-      const reloaded = await api.loadWorkspace(workspace.project.id);
+      let reloaded = await api.loadWorkspace(workspace.project.id);
+      for (const service of reloaded.services) await api.saveService(recalculationInput(service, reloaded));
+      reloaded = await api.loadWorkspace(workspace.project.id);
       setWorkspace(reloaded);
       const evaluated = evaluateWorkspace(reloaded, data.settings, data.pricing);
       if (evaluated.totalMinor != null && !evaluated.isPartial) {
-        setNotice("Estimado actualizado. Revisá el total y el desglose antes de generar el presupuesto.");
+        if (automatic && activeServiceId) {
+          setNotice("Cálculo interno listo. Actualizando las fuentes confiables disponibles…");
+          await startMarketResearchFor(activeServiceId, false, reloaded.project.id);
+        } else {
+          setNotice("Estimado calculado con tus datos manuales. Revisá el total y el desglose.");
+        }
         return;
       }
       const activeIssues = evaluated.services.find(({ service }) => service.id === activeServiceId)?.result.issues ?? [];
@@ -329,14 +384,18 @@ export function App() {
   async function updateMarket(force = false) {
     if (!activeServiceId || !workspace || marketJob?.status === "RUNNING") return;
     if (!(await autosave.flushAll())) { setNotice("No se pudo guardar el servicio antes de investigar el mercado."); return; }
+    await startMarketResearchFor(activeServiceId, force, workspace.project.id);
+  }
+
+  async function startMarketResearchFor(serviceId: string, force: boolean, projectId: string) {
     try {
-      const started = await api.startMarketResearch(activeServiceId, force);
+      const started = await api.startMarketResearch(serviceId, force);
       marketJobRef.current = started.id; setMarketJob(started); setNotice("");
-      void pollMarket(started.id, activeServiceId);
+      void pollMarket(started.id, serviceId, projectId);
     } catch (error) { setNotice(String(error)); }
   }
 
-  async function pollMarket(jobId: string, serviceId: string) {
+  async function pollMarket(jobId: string, serviceId: string, projectId: string) {
     while (marketJobRef.current === jobId) {
       await new Promise((resolve) => window.setTimeout(resolve, 500));
       try {
@@ -353,9 +412,10 @@ export function App() {
             const unavailable = next.items.filter((item) => ["ERROR", "BLOCKED", "NEEDS_CONFIGURATION"].includes(item.status)).length;
             setMarketOverview(overview);
             setMarketOverviewServiceId(serviceId);
-            // La investigación sólo aporta evidencia/propuesta. Nunca recargamos
-            // ciegamente el workspace aquí: una respuesta tardía no puede volver
-            // a mostrar un borrador anterior ni reemplazar lo que la persona escribió.
+            if (next.suggestionUpdateStatus === "APPLIED") {
+              const latestWorkspace = await api.loadWorkspace(projectId);
+              setWorkspace(latestWorkspace);
+            }
             setNotice(next.error || next.suggestionUpdateMessage || `${success} actualizadas · ${cached} en caché · ${manual} manuales · ${unavailable} no disponibles. La evidencia quedó separada del precio final.`);
             await refresh();
           } else if (next.status === "ERROR") setNotice(next.error || "La investigación no pudo completarse.");

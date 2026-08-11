@@ -31,7 +31,7 @@ describe("WorkspaceView", () => {
     render(<WorkspaceView workspace={workspace} settings={settings} pricing={pricing} result={result} presets={[]} statuses={{ video: "saved" }} errors={{}} activeServiceId="video" onActiveService={() => undefined} onAddService={async () => undefined} onVideoChange={() => undefined} onProgrammingChange={() => undefined} onGenericEngineChange={() => undefined} onFinalPriceChange={() => undefined} onTitleChange={() => undefined} onDeleteService={async () => undefined} onMoveService={async () => undefined} onRetry={() => undefined} onSavePreset={async () => undefined} onUpdatePreset={async () => undefined} onDeletePreset={async () => undefined} onRestorePreset={async () => undefined} market={null} marketJob={null} onUpdateMarket={async () => undefined} onCancelMarket={async () => undefined} onSaveQuote={async () => undefined} marketUpdating />);
 
     expect(screen.getByText(/Tus parámetros quedan bloqueados/i)).toBeInTheDocument();
-    expect(screen.getByLabelText("Horas estimadas")).toBeDisabled();
-    for (const button of screen.getAllByRole("button", { name: /calcular estimado/i })) expect(button).toBeDisabled();
+    expect(screen.getByLabelText("Tiempo estimado")).toBeDisabled();
+    for (const button of screen.getAllByRole("button", { name: /calcular (?:y actualizar fuentes|automático)/i })) expect(button).toBeDisabled();
   });
 });

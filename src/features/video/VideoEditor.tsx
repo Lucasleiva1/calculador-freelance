@@ -4,6 +4,7 @@ import type { Currency, Preset, QuoteService } from "../../domain/types";
 import { applyVideoPreset, type ExternalCost, type VideoConfiguration } from "../../domain/video";
 import { majorToMinor, minorToInput } from "../../domain/money";
 import { Button, Field, Input, Select } from "../../components/ui";
+import { EffortInput } from "../../components/EffortInput";
 
 const pieceTypes = [
   ["reel-short", "Reel / Short"], ["youtube", "YouTube"], ["advertising", "Publicidad"],
@@ -65,8 +66,8 @@ export function VideoEditor({
       <div className="editor-grid editor-grid--3">
         <Field label="Tipo de pieza" className="span-2"><Select value={config.pieceType} onChange={(event) => update("pieceType", event.target.value, true)}><option value="">Seleccionar</option>{pieceTypes.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</Select></Field>
         <Field label="Cantidad de piezas"><Input type="number" min="1" step="1" value={config.quantity} onChange={(event) => update("quantity", Math.max(1, Number(event.target.value) || 1))} /></Field>
-        <Field label="Material bruto" hint="Minutos"><div className="with-shortcuts"><Input type="number" min="0" value={config.rawMinutes ?? ""} onChange={(event) => update("rawMinutes", event.target.value === "" ? null : Math.max(0, Number(event.target.value)))} /><div>{[30,60,120,240].map((minutes) => <button type="button" key={minutes} onClick={() => update("rawMinutes", minutes, true)}>{minutes}</button>)}</div></div></Field>
-        <Field label="Duración final" hint="Formato MM:SS"><Input inputMode="numeric" placeholder="08:30" value={config.finalDuration} onChange={(event) => update("finalDuration", event.target.value)} /></Field>
+        <Field label="Material bruto" hint="Minutos recibidos"><div className="with-shortcuts"><Input type="number" min="0" value={config.rawMinutes ?? ""} onChange={(event) => update("rawMinutes", event.target.value === "" ? null : Math.max(0, Number(event.target.value)))} /><div>{[5,15,30,60].map((minutes) => <button type="button" key={minutes} onClick={() => update("rawMinutes", minutes, true)}>{minutes}</button>)}</div></div></Field>
+        <Field label="Duración final" hint="MM:SS · admite cualquier duración" className="span-2"><div className="with-shortcuts"><Input inputMode="numeric" placeholder="01:30" value={config.finalDuration} onChange={(event) => update("finalDuration", event.target.value)} /><div>{["00:30","01:00","01:30","02:00","03:00","05:00","10:00"].map((duration) => <button type="button" key={duration} onClick={() => update("finalDuration", duration, true)}>{duration}</button>)}</div></div></Field>
         <Field label="Resolución"><Input value="Full HD 1080p" disabled /></Field>
       </div>
     </div>
@@ -99,7 +100,7 @@ export function VideoEditor({
 
     <div className="editor-section pricing-section">
       <header><div><span className="eyebrow">Base económica</span><h3>Tiempo y costos transparentes</h3></div><p>El precio final y su override se administran en el inspector.</p></header>
-      <div className="editor-grid editor-grid--2"><Field label="Horas estimadas"><Input type="number" min="0" step="0.25" value={config.estimatedHours ?? ""} onChange={(event) => update("estimatedHours", event.target.value === "" ? null : Math.max(0, Number(event.target.value)))} /></Field></div>
+      <EffortInput amount={config.effortAmount} unit={config.effortUnit} hoursPerDay={config.hoursPerDay} estimatedHours={config.estimatedHours} onChange={(effort) => onChange({ ...config, effortAmount: effort.amount, effortUnit: effort.unit, hoursPerDay: effort.hoursPerDay, estimatedHours: effort.estimatedHours }, service.manualSubtotalMinor, service.manualReason)} />
       <div className="costs"><div className="costs__header"><span className="field__label">Archivos / costos externos</span><Button type="button" variant="ghost" onClick={addCost}><Plus size={15} /> Añadir costo</Button></div>{config.externalCosts.length === 0 ? <p className="muted-line">No hay costos externos.</p> : config.externalCosts.map((cost) => <div className="cost-row" key={cost.id}><Input aria-label="Nombre del costo" placeholder="Concepto" value={cost.name} onChange={(event) => patchCost(cost.id, { name: event.target.value })} /><Input aria-label="Importe del costo" type="number" min="0" step="0.01" value={minorToInput(cost.amountMinor)} onChange={(event) => patchCost(cost.id, { amountMinor: majorToMinor(event.target.value) ?? 0 })} /><Select aria-label="Moneda del costo" value={cost.currency} onChange={(event) => patchCost(cost.id, { currency: event.target.value as Currency })}><option>USD</option><option>ARS</option></Select><Input aria-label="Nota del costo" placeholder="Nota opcional" value={cost.note} onChange={(event) => patchCost(cost.id, { note: event.target.value })} /><button className="icon-button" aria-label="Eliminar costo" onClick={() => update("externalCosts", config.externalCosts.filter((item) => item.id !== cost.id))}><Trash2 size={16} /></button></div>)}</div>
     </div>
   </div>;

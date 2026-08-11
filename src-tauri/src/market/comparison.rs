@@ -179,7 +179,13 @@ pub fn compare_market(
         ) {
             salary_excluded += 1;
         }
-        let normalized = if !participating_source_ids.contains(&observation.source_id) {
+        let observation_date = observation
+            .published_at
+            .as_deref()
+            .or(Some(&observation.retrieved_at));
+        let normalized = if !is_recent(observation_date) {
+            Err("La referencia tiene más de dos años y se conserva sólo como historial.".into())
+        } else if !participating_source_ids.contains(&observation.source_id) {
             Err("La fuente aporta contexto, pero no participa en sugerencias.".into())
         } else if !region_matches(&observation.region, &context.region_targets) {
             Err("La región no coincide con el objetivo de esta cotización.".into())
@@ -195,12 +201,7 @@ pub fn compare_market(
         };
         match normalized {
             Ok(value) => {
-                if is_recent(
-                    observation
-                        .published_at
-                        .as_deref()
-                        .or(Some(&observation.retrieved_at)),
-                ) {
+                if is_recent(observation_date) {
                     recent_count += 1;
                 }
                 comparable.push(ComparableObservation {
@@ -417,6 +418,24 @@ mod tests {
         assert_eq!(
             items[0].reason.as_deref(),
             Some("El subservicio no coincide con el alcance concreto de la cotización.")
+        );
+    }
+
+    #[test]
+    fn references_older_than_two_years_remain_history_only() {
+        let mut stale = observation("stale", "HOURLY", 5_000);
+        stale.published_at = Some("2020-01-01".into());
+        let observations = vec![stale];
+        let participating = HashSet::from(["source-stale".to_string()]);
+        let context = MarketQueryContext {
+            estimated_hours: Some(10.0),
+            ..MarketQueryContext::generic("programming".into(), vec!["INTERNATIONAL".into()])
+        };
+        let (items, summary) = compare_market(&observations, &context, "USD", None, &participating);
+        assert_eq!(summary.comparable_count, 0);
+        assert_eq!(
+            items[0].reason.as_deref(),
+            Some("La referencia tiene más de dos años y se conserva sólo como historial.")
         );
     }
 }
