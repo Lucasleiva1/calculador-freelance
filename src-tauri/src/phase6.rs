@@ -15,7 +15,7 @@ use crate::{
     error::{command_error, AppError, AppResult},
 };
 
-const BACKUP_SCHEMA_VERSION: i64 = 1;
+const BACKUP_SCHEMA_VERSION: i64 = 2;
 const BACKUP_TABLES: &[&str] = &[
     "clients",
     "projects",
@@ -35,6 +35,7 @@ const BACKUP_TABLES: &[&str] = &[
     "market_sources",
     "engine_categories",
     "pricing_engines",
+    "engine_economic_profiles",
     "pricing_engine_sources",
     "market_observations",
     "market_snapshots",

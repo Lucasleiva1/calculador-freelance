@@ -1,6 +1,7 @@
 import type { Currency } from "./types";
 
 export type EconomyImportValues = {
+  activity?: string;
   currency?: Currency;
   manualHourlyRate?: number;
   monthlyIncomeTarget?: number;
@@ -16,10 +17,11 @@ export type EconomyImportValues = {
 export type EconomyImportResult = {
   values: EconomyImportValues;
   importedFields: string[];
+  missingFields: string[];
   warnings: string[];
 };
 
-type Field = Exclude<keyof EconomyImportValues, "currency">;
+type Field = Exclude<keyof EconomyImportValues, "activity" | "currency">;
 
 const labels: Record<Field, string> = {
   manualHourlyRate: "Tarifa manual por hora",
@@ -34,6 +36,7 @@ const labels: Record<Field, string> = {
 };
 
 const aliases: Record<keyof EconomyImportValues, string[]> = {
+  activity: ["actividad", "profesion", "profession", "activity"],
   currency: ["moneda", "currency", "divisa"],
   manualHourlyRate: ["tarifamanualporhora", "tarifaporhora", "tarifahoraria", "manualhourlyrate", "hourlyrate"],
   monthlyIncomeTarget: ["ingresomensualobjetivo", "objetivomensual", "monthlyincometarget", "monthlyincome"],
@@ -103,6 +106,11 @@ export function parseEconomyImport(text: string): EconomyImportResult {
   const values: EconomyImportValues = {};
   const importedFields: string[] = [];
   const warnings: string[] = [];
+  const rawActivity = readValue(record, "activity");
+  if (rawActivity != null && String(rawActivity).trim()) {
+    values.activity = String(rawActivity).trim();
+    importedFields.push("Actividad");
+  }
   const rawCurrency = readValue(record, "currency");
   if (rawCurrency != null) {
     const currency = String(rawCurrency).trim().toUpperCase();
@@ -118,8 +126,11 @@ export function parseEconomyImport(text: string): EconomyImportResult {
     values[field] = value;
     importedFields.push(labels[field]);
   });
-  if (importedFields.length === 0) throw new Error("No encontré campos de Mi economía. Usá la plantilla JSON o líneas con el formato campo: valor.");
-  return { values, importedFields, warnings };
+  const missingFields = (Object.keys(labels) as Field[]).filter((field) => values[field] == null).map((field) => labels[field]);
+  if (missingFields.length === Object.keys(labels).length) {
+    throw new Error("Este archivo no contiene valores económicos numéricos. Si es la guía para IA o una plantilla con textos NUMERO_, primero pedile a la IA el JSON final completo e importá esa respuesta.");
+  }
+  return { values, importedFields, missingFields, warnings };
 }
 
 export function importNumberInput(value: number | undefined) {

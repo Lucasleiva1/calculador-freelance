@@ -27,6 +27,23 @@ describe("market intelligence domain", () => {
     expect(JSON.stringify(context)).not.toContain("privateClientName");
   });
 
+  it("lee el sobre profesional de estampas sin tratarlo como programación", () => {
+    const printDesign: QuoteService = {
+      ...service,
+      id: "print-design",
+      serviceType: "print-design",
+      title: "Estampa",
+      configurationJson: JSON.stringify({ data: { parameterValues: { mainWorkType: "vector-corrected", complexity: "high", printOutput: ["dtf"], vectorizationLevel: "manual-correction", editableDelivery: "ai", estimatedHours: 3.5, projectType: "no-debe-usarse" } } }),
+    };
+    const context = buildMarketQueryContext(printDesign, "both");
+    expect(context.service).toBe("print-design");
+    expect(context.subtype).toBe("vector-corrected");
+    expect(context.level).toBe("high");
+    expect(context.estimatedHours).toBe(3.5);
+    expect(context.features).toEqual(expect.arrayContaining(["printOutput", "vectorizationLevel", "editableDelivery"]));
+    expect(context.features).not.toContain("projectType");
+  });
+
   it("aplica estrategia de mercado sin tocar el precio final capturado", () => {
     expect(suggestedFromSnapshot(snapshot, "balanced")).toBe(61_800);
     expect(snapshot.finalPriceMinorAtCreation).toBe(72_000);

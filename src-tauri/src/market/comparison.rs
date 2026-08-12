@@ -112,8 +112,7 @@ fn is_recent(value: Option<&str>) -> bool {
 fn region_matches(observation: &str, targets: &[String]) -> bool {
     targets.iter().any(|target| {
         target == observation
-            || (target == "INTERNATIONAL"
-                && matches!(observation, "GLOBAL" | "INTERNATIONAL"))
+            || (target == "INTERNATIONAL" && matches!(observation, "GLOBAL" | "INTERNATIONAL"))
             || (target == "LATAM" && matches!(observation, "AR" | "LATAM"))
     })
 }
@@ -129,6 +128,9 @@ fn level_matches(observation: &MarketObservation, context: &MarketQueryContext) 
         return true;
     };
     let level = level.to_lowercase();
+    if level.contains("semi senior") {
+        return true;
+    }
     match target {
         "basic" | "low" => ["junior", "entry", "principiante"]
             .iter()
@@ -162,6 +164,13 @@ fn subtype_matches(observation: &MarketObservation, context: &MarketQueryContext
         observation.category.as_deref().unwrap_or_default()
     )
     .to_lowercase();
+    if context.service == "print-design"
+        && ["remera", "estampa", "graphic design", "diseño gráfico"]
+            .iter()
+            .any(|value| description.contains(value))
+    {
+        return true;
+    }
     if description.contains(subtype) {
         return true;
     }
@@ -520,5 +529,37 @@ mod tests {
         let (_, summary) = compare_market(&observations, &context, "USD", None, &participating);
         assert_eq!(summary.median_minor, Some(10_000));
         assert_eq!(summary.confidence_level, "LOW");
+    }
+
+    #[test]
+    fn print_design_keeps_a_local_project_price_without_estimated_hours() {
+        let observations = [
+            ("ardg-a", 25_200_000),
+            ("ardg-b", 18_000_000),
+            ("ardg-c", 14_400_000),
+        ]
+        .into_iter()
+        .map(|(id, value)| {
+            let mut row = observation(id, "PROJECT", value);
+            row.service_type = "print-design".into();
+            row.region = "AR".into();
+            row.currency = "ARS".into();
+            row.subservice = Some("Diseño para remera".into());
+            row.category = Some("ARDG · Promocionales · Remera".into());
+            row
+        })
+        .collect::<Vec<_>>();
+        let participating = observations
+            .iter()
+            .map(|item| item.source_id.clone())
+            .collect();
+        let context = MarketQueryContext {
+            subtype: Some("design-from-scratch".into()),
+            estimated_hours: None,
+            ..MarketQueryContext::generic("print-design".into(), vec!["AR".into()])
+        };
+        let (_, summary) = compare_market(&observations, &context, "ARS", None, &participating);
+        assert_eq!(summary.comparable_count, 3);
+        assert_eq!(summary.median_minor, Some(18_000_000));
     }
 }

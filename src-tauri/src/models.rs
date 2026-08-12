@@ -265,6 +265,7 @@ pub struct PricingRule {
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 #[serde(rename_all = "camelCase")]
 pub struct EconomicProfile {
+    pub engine_id: String,
     pub currency: String,
     pub monthly_income_target_minor: Option<i64>,
     pub monthly_expenses_minor: Option<i64>,
@@ -722,6 +723,7 @@ pub struct PricingRuleInput {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EconomicProfileInput {
+    pub engine_id: String,
     pub currency: String,
     pub monthly_income_target_minor: Option<i64>,
     pub monthly_expenses_minor: Option<i64>,

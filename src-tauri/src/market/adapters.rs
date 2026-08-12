@@ -42,6 +42,9 @@ pub fn extract_with_adapter(
         Some("solopricing") => Box::new(SoloPricingAdapter),
         Some("golance") => Box::new(GoLanceAdapter),
         Some("prolatam") => Box::new(ProLatamAdapter),
+        Some("ardg-print-design") => Box::new(ArdgPrintDesignAdapter),
+        Some("twine-graphic-design") => Box::new(TwineGraphicDesignAdapter),
+        Some("freelancerateiq-graphic-design") => Box::new(FreelanceRateIqGraphicDesignAdapter),
         Some("bcra") => Box::new(BcraAdapter),
         Some("generic") | None => Box::new(GenericAdapter),
         Some(_) => {
@@ -320,10 +323,15 @@ impl SourceAdapter for UpworkAdapter {
         final_url: &str,
     ) -> AppResult<Vec<ObservationDraft>> {
         let text = html_text(body);
-        let role = if context.service == "video-editing" {
-            "Video Editor"
-        } else {
-            "Software Developer"
+        let role = match context.service.as_str() {
+            "video-editing" => "Video Editor",
+            "programming" => "Software Developer",
+            "print-design" => "Graphic Designer for apparel prints",
+            _ => {
+                return Err(AppError::Validation(
+                    "Upwork no tiene un rol aprobado para este motor.".into(),
+                ))
+            }
         };
         let mut rows = Vec::new();
         let overall = Regex::new(
@@ -666,7 +674,11 @@ impl SourceAdapter for ProLatamAdapter {
             let fallback: &[(&str, i64, i64)] = if context.service == "video-editing" {
                 &[("Junior", 6, 12), ("Mid-level", 15, 28), ("Senior", 32, 58)]
             } else {
-                &[("Junior", 25, 40), ("Mid-level", 40, 62), ("Senior", 60, 85)]
+                &[
+                    ("Junior", 25, 40),
+                    ("Mid-level", 40, 62),
+                    ("Senior", 60, 85),
+                ]
             };
             let argentina_present = text.to_lowercase().contains("argentina");
             for (level, minimum, maximum) in fallback {
@@ -696,6 +708,189 @@ impl SourceAdapter for ProLatamAdapter {
             row.notes = Some("Benchmark argentino por experiencia. La moneda original es USD y se convierte con la cotización auditada por Pricing OS.".into());
         }
         Ok(rows)
+    }
+}
+
+struct ArdgPrintDesignAdapter;
+
+impl SourceAdapter for ArdgPrintDesignAdapter {
+    fn key(&self) -> &'static str {
+        "ardg-print-design"
+    }
+
+    fn extract(
+        &self,
+        body: &str,
+        _source: &MarketSource,
+        context: &MarketQueryContext,
+        final_url: &str,
+    ) -> AppResult<Vec<ObservationDraft>> {
+        let text = html_text(body);
+        let mut rows = Vec::new();
+        for (tier, pattern) in [
+            ("A", r"(?i)Cliente\s+A[^$]{0,20}\$\s*([0-9.]+)"),
+            ("B", r"(?i)Cliente\s+B[^$]{0,20}\$\s*([0-9.]+)"),
+            ("C", r"(?i)Cliente\s+C[^$]{0,20}\$\s*([0-9.]+)"),
+        ] {
+            let Some(value) = Regex::new(pattern)
+                .expect("ardg hourly tier")
+                .captures(&text)
+                .and_then(|capture| capture.get(1))
+                .and_then(|value| parse_localized_minor(value.as_str(), "ARS", "es-AR"))
+            else {
+                continue;
+            };
+            rows.push(ObservationDraft {
+                service_type: context.service.clone(),
+                subservice: Some("Diseño gráfico para estampas".into()),
+                category: Some("ARDG · valor hora".into()),
+                region: "AR".into(),
+                country: Some("Argentina".into()),
+                currency: "ARS".into(),
+                price_type: "HOURLY".into(),
+                unit: "por hora".into(),
+                price_min_minor: None,
+                price_max_minor: None,
+                price_value_minor: Some(value),
+                original_value_text: format!("ARS {} por hora · Cliente {tier}", value as f64 / 100.0),
+                experience_level: None,
+                client_tier: Some(tier.into()),
+                source_url: final_url.into(),
+                published_at: Some("2026-07-01".into()),
+                confidence: "HIGH".into(),
+                comparison_eligibility: "ELIGIBLE".into(),
+                exclusion_reason: None,
+                evidence_snippet: Some(format!("ARDG · valor hora · Cliente {tier}: ARS {}", value as f64 / 100.0)),
+                notes: Some("Tarifario orientativo oficial de la Asociación Rosarina de Diseño Gráfico, actualizado en julio de 2026.".into()),
+            });
+        }
+
+        let remera = Regex::new(
+            r"(?i)Remera[^$]{0,20}\$\s*([0-9.]+)[^$]{0,20}\$\s*([0-9.]+)[^$]{0,20}\$\s*([0-9.]+)",
+        )
+        .expect("ardg remera prices");
+        if let Some(capture) = remera.captures(&text) {
+            for (index, tier) in ["A", "B", "C"].iter().enumerate() {
+                let Some(value) = capture
+                    .get(index + 1)
+                    .and_then(|value| parse_localized_minor(value.as_str(), "ARS", "es-AR"))
+                else {
+                    continue;
+                };
+                rows.push(ObservationDraft {
+                    service_type: context.service.clone(),
+                    subservice: Some("Diseño para remera".into()),
+                    category: Some("ARDG · Promocionales · Remera".into()),
+                    region: "AR".into(),
+                    country: Some("Argentina".into()),
+                    currency: "ARS".into(),
+                    price_type: "PROJECT".into(),
+                    unit: "por proyecto".into(),
+                    price_min_minor: None,
+                    price_max_minor: None,
+                    price_value_minor: Some(value),
+                    original_value_text: format!("ARS {} por diseño de remera · Cliente {tier}", value as f64 / 100.0),
+                    experience_level: None,
+                    client_tier: Some((*tier).into()),
+                    source_url: final_url.into(),
+                    published_at: Some("2026-07-01".into()),
+                    confidence: "HIGH".into(),
+                    comparison_eligibility: "ELIGIBLE".into(),
+                    exclusion_reason: None,
+                    evidence_snippet: Some(format!("ARDG · Remera · Cliente {tier}: ARS {}", value as f64 / 100.0)),
+                    notes: Some("Referencia específica para una pieza promocional de remera; el alcance concreto de estampas se compara además con las tarifas horarias.".into()),
+                });
+            }
+        }
+        Ok(rows)
+    }
+}
+
+struct TwineGraphicDesignAdapter;
+
+impl SourceAdapter for TwineGraphicDesignAdapter {
+    fn key(&self) -> &'static str {
+        "twine-graphic-design"
+    }
+
+    fn extract(
+        &self,
+        body: &str,
+        _source: &MarketSource,
+        context: &MarketQueryContext,
+        final_url: &str,
+    ) -> AppResult<Vec<ObservationDraft>> {
+        let text = html_text(body);
+        Ok(extract_named_hourly_ranges(
+            &text,
+            context,
+            final_url,
+            "Diseñador gráfico freelance",
+            "Twine · tarifas de diseño gráfico",
+            "2025-11-21",
+            &[
+                (
+                    "Entry-level",
+                    r"(?i)Entry-level freelance graphic designer\s*\|?\s*\$\s*([0-9]+)\s*(?:-|\x{2013}|\x{2014}|to)\s*\$?\s*([0-9]+)\s*/\s*hour",
+                ),
+                (
+                    "Mid-level",
+                    r"(?i)Mid-level freelance graphic designer\s*\|?\s*\$\s*([0-9]+)\s*(?:-|\x{2013}|\x{2014}|to)\s*\$?\s*([0-9]+)\s*/\s*hour",
+                ),
+                (
+                    "Senior",
+                    r"(?i)Senior or specialised freelance graphic designer\s*\|?\s*\$\s*([0-9]+)\s*(?:-|\x{2013}|\x{2014}|to)\s*\$?\s*([0-9]+)\+?\s*/\s*hour",
+                ),
+            ],
+        ))
+    }
+}
+
+struct FreelanceRateIqGraphicDesignAdapter;
+
+impl SourceAdapter for FreelanceRateIqGraphicDesignAdapter {
+    fn key(&self) -> &'static str {
+        "freelancerateiq-graphic-design"
+    }
+
+    fn extract(
+        &self,
+        body: &str,
+        _source: &MarketSource,
+        context: &MarketQueryContext,
+        final_url: &str,
+    ) -> AppResult<Vec<ObservationDraft>> {
+        let text = html_text(body);
+        Ok(extract_named_hourly_ranges(
+            &text,
+            context,
+            final_url,
+            "Diseñador gráfico freelance",
+            "FreelanceRateIQ · diseño gráfico 2026",
+            "2026-04-13",
+            &[
+                (
+                    "Entry",
+                    r"(?i)Entry\s*\([^)]*\)\s*\|?\s*\$\s*([0-9]+)\s*(?:-|\x{2013}|\x{2014}|to)\s*\$?\s*([0-9]+)\s*/\s*hr",
+                ),
+                (
+                    "Junior",
+                    r"(?i)Junior\s*\([^)]*\)\s*\|?\s*\$\s*([0-9]+)\s*(?:-|\x{2013}|\x{2014}|to)\s*\$?\s*([0-9]+)\s*/\s*hr",
+                ),
+                (
+                    "Mid-level",
+                    r"(?i)Mid-level\s*\([^)]*\)\s*\|?\s*\$\s*([0-9]+)\s*(?:-|\x{2013}|\x{2014}|to)\s*\$?\s*([0-9]+)\s*/\s*hr",
+                ),
+                (
+                    "Senior",
+                    r"(?i)Senior\s*\([^)]*\)\s*\|?\s*\$\s*([0-9]+)\s*(?:-|\x{2013}|\x{2014}|to)\s*\$?\s*([0-9]+)\s*/\s*hr",
+                ),
+                (
+                    "Expert",
+                    r"(?i)Expert\s*/\s*Brand Strategist\s*\([^)]*\)\s*\|?\s*\$\s*([0-9]+)\s*(?:-|\x{2013}|\x{2014}|to)\s*\$?\s*([0-9]+)\+?\s*/\s*hr",
+                ),
+            ],
+        ))
     }
 }
 
@@ -1236,6 +1431,61 @@ mod tests {
     }
 
     #[test]
+    fn ardg_extracts_argentina_hourly_and_remera_prices_for_print_design() {
+        let html = "Valor Hora | Actualizado jul 2026 Cliente A | $42.000 Cliente B | $30.000 Cliente C | $24.000 Promocionales Cliente A Cliente B Cliente C Remera | $252.000 | $180.000 | $144.000";
+        let rows = ArdgPrintDesignAdapter
+            .extract(
+                html,
+                &source("ardg-print-design"),
+                &MarketQueryContext::generic("print-design".into(), vec!["AR".into()]),
+                "https://ardg.ar/tarifario/",
+            )
+            .unwrap();
+        assert_eq!(rows.len(), 6);
+        assert!(rows
+            .iter()
+            .all(|row| row.region == "AR" && row.currency == "ARS"));
+        assert!(rows
+            .iter()
+            .any(|row| row.price_type == "HOURLY" && row.price_value_minor == Some(4_200_000)));
+        assert!(rows
+            .iter()
+            .any(|row| row.price_type == "PROJECT" && row.price_value_minor == Some(14_400_000)));
+    }
+
+    #[test]
+    fn twine_extracts_graphic_design_experience_bands() {
+        let html = "Entry-level freelance graphic designer | $25 – $50 / hour Mid-level freelance graphic designer | $50 – $100 / hour Senior or specialised freelance graphic designer | $100 – $200+ / hour";
+        let rows = TwineGraphicDesignAdapter
+            .extract(
+                html,
+                &source("twine-graphic-design"),
+                &MarketQueryContext::generic("print-design".into(), vec!["GLOBAL".into()]),
+                "https://www.twine.net/blog/freelance-graphic-designer-hourly-rates/",
+            )
+            .unwrap();
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].price_min_minor, Some(2_500));
+        assert_eq!(rows[2].price_max_minor, Some(20_000));
+    }
+
+    #[test]
+    fn freelancerateiq_extracts_current_graphic_design_bands() {
+        let html = "Entry (0–2 yrs) | $25–$45/hr Junior (2–4 yrs) | $45–$70/hr Mid-level (4–7 yrs) | $65–$100/hr Senior (7–12 yrs) | $95–$150/hr Expert / Brand Strategist (12+ yrs) | $150–$250+/hr";
+        let rows = FreelanceRateIqGraphicDesignAdapter
+            .extract(
+                html,
+                &source("freelancerateiq-graphic-design"),
+                &MarketQueryContext::generic("print-design".into(), vec!["GLOBAL".into()]),
+                "https://freelancerateiq.com/blog/freelance-graphic-design-rates",
+            )
+            .unwrap();
+        assert_eq!(rows.len(), 5);
+        assert_eq!(rows[0].price_min_minor, Some(2_500));
+        assert_eq!(rows[4].price_max_minor, Some(25_000));
+    }
+
+    #[test]
     fn indexdev_extracts_software_experience_bands() {
         let html = "Entry-Level Software Developers Fresh out of uni. Typical rate: $50-70/hr Mid-Level Software Developers 3-7 years. Typical rate: $70-100/hr Senior Software Developers 7+ years. Typical rate: $100-160/hr";
         let rows = IndexDevAdapter
@@ -1342,6 +1592,21 @@ mod tests {
                     "golance",
                     "https://golance.com/hiring/best-freelance-software-developers-hourly-rate",
                     "programming",
+                ),
+                (
+                    "twine-graphic-design",
+                    "https://www.twine.net/blog/freelance-graphic-designer-hourly-rates/",
+                    "print-design",
+                ),
+                (
+                    "freelancerateiq-graphic-design",
+                    "https://freelancerateiq.com/blog/freelance-graphic-design-rates",
+                    "print-design",
+                ),
+                (
+                    "ardg-print-design",
+                    "https://ardg.ar/tarifario/",
+                    "print-design",
                 ),
             ];
             for (adapter, url, service) in cases {

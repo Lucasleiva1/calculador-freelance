@@ -20,6 +20,54 @@
   --paper-texture: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='90' height='90' viewBox='0 0 90 90'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.8' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.025'/%3E%3C/svg%3E");
 }
 
+/* Diseño de estampas */
+.print-design-editor { gap: 14px; }
+.print-design-context { display: flex; justify-content: space-between; gap: 24px; align-items: flex-start; }
+.print-design-context__facts { display: grid; grid-template-columns: repeat(2, minmax(150px, 1fr)); gap: 8px; min-width: min(100%, 360px); }
+.print-design-context__facts span { border: 1px solid var(--border); background: var(--surface-secondary); padding: 12px; display: grid; gap: 4px; }
+.print-design-context__facts b { color: var(--text-muted); font-size: 10px; letter-spacing: .12em; text-transform: uppercase; }
+.complexity-guide { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.complexity-guide article { border: 1px solid var(--border); background: var(--surface); padding: 12px; display: grid; gap: 5px; }
+.complexity-guide strong { color: var(--accent); text-transform: uppercase; font-size: 11px; letter-spacing: .08em; }
+.complexity-guide span { color: var(--text-muted); font-size: 12px; line-height: 1.4; }
+.print-design-groups { display: grid; gap: 8px; }
+.print-design-group { border: 1px solid var(--border); background: var(--surface); }
+.print-design-group > summary { cursor: pointer; list-style: none; display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 15px 17px; user-select: none; }
+.print-design-group > summary::-webkit-details-marker { display: none; }
+.print-design-group > summary span { display: grid; gap: 3px; }
+.print-design-group > summary strong { font-size: 14px; letter-spacing: .03em; }
+.print-design-group > summary small { color: var(--text-muted); font-size: 12px; font-weight: 400; }
+.print-design-group > summary svg { flex: 0 0 auto; transition: transform .18s ease; }
+.print-design-group[open] > summary { border-bottom: 1px solid var(--border); }
+.print-design-group[open] > summary svg { transform: rotate(180deg); }
+.print-design-group__body { padding: 17px; }
+.print-design-group .dynamic-fields { align-items: start; }
+.print-design-time { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border); }
+.print-design-time__heading { display: flex; gap: 10px; align-items: flex-start; margin-bottom: 14px; }
+.print-design-time__heading div { display: grid; gap: 3px; }
+.print-design-time__heading span { color: var(--text-muted); font-size: 12px; }
+.print-design-time__mode { margin-top: 12px; display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--text-muted); font-size: 12px; }
+.print-design-time__mode .button { flex: 0 0 auto; }
+.print-design-summary { border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--border)); background: color-mix(in srgb, var(--accent) 7%, var(--surface)); padding: 18px; display: grid; gap: 14px; }
+.print-design-summary header { display: flex; gap: 10px; align-items: center; }
+.print-design-summary h3 { margin: 2px 0 0; }
+.print-design-summary ul { margin: 0; padding-left: 20px; display: grid; gap: 7px; }
+.print-design-summary li { line-height: 1.4; }
+.print-design-summary p { margin: 0; padding-top: 12px; border-top: 1px solid var(--border); line-height: 1.5; }
+.print-design-summary__empty { color: var(--text-muted); display: flex; gap: 9px; align-items: center; }
+
+@media (max-width: 1100px) {
+  .complexity-guide { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .print-design-context { flex-direction: column; }
+  .print-design-context__facts { width: 100%; }
+}
+
+@media (max-width: 680px) {
+  .complexity-guide, .print-design-context__facts { grid-template-columns: 1fr; }
+  .print-design-group > summary { padding: 13px; }
+  .print-design-group__body { padding: 13px; }
+}
+
 :root[data-theme="dark"] {
   color-scheme: dark;
   --background: #090909;
@@ -1139,4 +1187,186 @@ h1, h2, h3 { text-wrap: balance; }
   .hero-price strong { font-size: 28px; }
   .pricing-stack { max-height: none; overflow: visible; border-top: 1px solid var(--border); }
   .metric { min-height: 50px; }
+}
+
+/* Barra inferior: una sola acción principal y dos utilidades compactas. Las
+   container queries responden al espacio real incluso con escalado de Windows. */
+.workspace-layout {
+  container-name: quote-workspace;
+  container-type: inline-size;
+  grid-template-rows: minmax(0, 1fr) auto;
+}
+
+.actionbar {
+  display: grid;
+  grid-template-columns: max-content minmax(320px, 1fr) max-content;
+  gap: 16px;
+  min-height: 76px;
+  padding: 9px 18px;
+  overflow: visible;
+}
+
+.actionbar__summary {
+  min-width: max-content;
+}
+
+.actionbar__summary i {
+  margin-right: 0;
+}
+
+.actionbar__actions {
+  display: grid;
+  grid-template-columns: 44px minmax(230px, 320px) 44px;
+  justify-content: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.actionbar__actions .button {
+  width: 100%;
+  min-width: 0;
+  line-height: 1.25;
+  white-space: normal;
+}
+
+.actionbar__actions .button:first-child {
+  grid-column: auto;
+}
+
+.actionbar__icon-action {
+  width: 44px !important;
+  height: 44px;
+  min-height: 44px !important;
+  padding: 0 !important;
+  background: transparent;
+}
+
+.actionbar__primary-action {
+  min-height: 54px !important;
+  padding-right: 24px !important;
+  padding-left: 24px !important;
+  font-size: 13px;
+  font-weight: 750;
+  letter-spacing: .075em;
+}
+
+.actionbar__total {
+  display: flex;
+  min-width: max-content;
+  align-items: center;
+  gap: 12px;
+  padding-left: 15px;
+  border-left: 1px solid var(--border);
+  text-transform: uppercase;
+}
+
+.actionbar__total span {
+  color: var(--text-muted);
+  font-size: 10px;
+  letter-spacing: .1em;
+}
+
+.actionbar__total b {
+  font-size: 18px;
+  white-space: nowrap;
+}
+
+@container quote-workspace (max-width: 900px) {
+  .actionbar {
+    grid-template-columns: minmax(320px, 1fr) max-content;
+    gap: 12px;
+  }
+
+  .actionbar__summary {
+    display: none;
+  }
+}
+
+@container quote-workspace (max-width: 620px) {
+  .actionbar {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px;
+    padding-top: 8px;
+    padding-bottom: 8px;
+  }
+
+  .actionbar__actions {
+    grid-template-columns: 42px minmax(0, 1fr) 42px;
+    width: 100%;
+  }
+
+  .actionbar__icon-action {
+    width: 42px !important;
+  }
+
+  .actionbar__total {
+    justify-content: flex-end;
+    padding-top: 6px;
+    padding-left: 0;
+    border-top: 1px solid var(--border);
+    border-left: 0;
+  }
+}
+
+@media (max-width: 980px) {
+  .workspace-layout { grid-template-rows: minmax(0, 1fr) 320px auto; }
+}
+
+@media (max-width: 870px) {
+  .workspace-layout { grid-template-rows: minmax(0, 1fr) 280px auto; }
+}
+
+@media (max-width: 700px) {
+  .workspace-layout { grid-template-rows: minmax(0, 1fr) 300px auto; }
+}
+
+@media (max-width: 440px) {
+  .workspace-layout { grid-template-rows: minmax(0, 1fr) 360px auto; }
+}
+
+/* Mi economía: el contexto profesional queda primero y siempre visible. */
+.economy-profession {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  align-items: start;
+  gap: 22px;
+  border-color: color-mix(in srgb, var(--accent) 48%, var(--border)) !important;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 9%, var(--panel)) 0%, var(--panel) 58%);
+}
+
+.economy-profession h2 {
+  margin: 5px 0 7px;
+  font-size: clamp(22px, 2.3vw, 34px);
+}
+
+.economy-profession__status {
+  display: flex;
+  min-width: 126px;
+  align-items: center;
+  gap: 9px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  background: var(--panel-strong);
+  text-transform: uppercase;
+}
+
+.economy-profession__status.is-ready { color: #3f8b58; }
+.economy-profession__status.is-pending { color: #b16a18; }
+.economy-profession__status span { display: grid; gap: 2px; font-size: 11px; font-weight: 800; letter-spacing: .08em; }
+.economy-profession__status small { color: var(--text-muted); font-size: 9px; }
+
+.economy-profession__controls {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: minmax(260px, 1fr) minmax(170px, 220px);
+  align-items: end;
+  gap: 14px;
+}
+
+.economy-profession__controls > div:last-child { display: grid; gap: 8px; }
+
+@media (max-width: 700px) {
+  .economy-profession { grid-template-columns: minmax(0, 1fr); }
+  .economy-profession__status { width: fit-content; }
+  .economy-profession__controls { grid-column: 1; grid-template-columns: minmax(0, 1fr); }
 }

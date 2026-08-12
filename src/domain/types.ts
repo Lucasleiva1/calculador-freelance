@@ -133,7 +133,7 @@ export interface ServiceParameter {
 
 export interface ParameterOption { id: string; parameterId: string; label: string; value: string; sortOrder: number; enabled: boolean; createdAt: string; updatedAt: string; }
 export interface PricingRule { id: string; serviceDefinitionId: string; parameterId: string | null; optionId: string | null; quantityParameterId: string | null; name: string; ruleType: PricingRuleType; numericValueMicros: number | null; amountArsMinor: number | null; amountUsdMinor: number | null; sortOrder: number; enabled: boolean; version: number; createdAt: string; updatedAt: string; }
-export interface EconomicProfile { currency: Currency; monthlyIncomeTargetMinor: number | null; monthlyExpensesMinor: number | null; billableHoursMicros: number | null; reserveTaxMicros: number | null; desiredMarginMicros: number | null; defaultUrgencyMicros: number | null; workDays: number | null; vacationWeeks: number | null; manualHourlyRateMinor: number | null; updatedAt: string; }
+export interface EconomicProfile { engineId: string; currency: Currency; monthlyIncomeTargetMinor: number | null; monthlyExpensesMinor: number | null; billableHoursMicros: number | null; reserveTaxMicros: number | null; desiredMarginMicros: number | null; defaultUrgencyMicros: number | null; workDays: number | null; vacationWeeks: number | null; manualHourlyRateMinor: number | null; updatedAt: string; }
 export interface MarketSource {
   id: string; name: string; baseUrl: string | null; sourceType: string; regionsJson: string;
   supportedServicesJson: string; priority: number; enabled: boolean; usageMode: string;

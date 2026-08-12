@@ -53,6 +53,9 @@ export function ResultInspector({
   const fxRate = automatic.fxRateMicros ?? usdToArsMicros;
   const snapshotCurrency = snapshot?.currency ?? currency;
   const localPrice = active?.result.calculatedSubtotalMinor ?? null;
+  const localIssues = active?.result.issues ?? [];
+  const needsEconomy = localIssues.some((issue) => /economía|tarifa|objetivo mensual|gastos mensuales|horas facturables/iu.test(issue));
+  const localPendingDescription = localIssues[0] ?? "Faltan datos del alcance para calcular este precio. Los otros dos precios siguen funcionando.";
   const marketPrice = optionValue(automatic.market, snapshotCurrency, currency, fxRate);
   const [internationalCurrency, setInternationalCurrency] = useState<Currency>(currency);
   const internationalPrice = optionValue(automatic.international, snapshotCurrency, internationalCurrency, fxRate);
@@ -95,9 +98,9 @@ export function ResultInspector({
             eyebrow="Tus parámetros manuales"
             value={localPrice}
             currency={currency}
-            description={localPrice == null ? "Completá tu economía o tarifa. Los otros dos precios siguen funcionando." : "Tu base local calculada sólo con los datos que cargaste."}
+            description={localPrice == null ? localPendingDescription : "Tu base local calculada sólo con los datos que cargaste."}
             onChoose={localPrice != null && onFinalPriceChange ? () => choosePrice(localPrice, currency, "Precio local / sostenible") : undefined}
-            action={localPrice == null && onConfigureEconomy ? <Button type="button" variant="ghost" onClick={onConfigureEconomy}><Settings2 size={14} /> Completar datos</Button> : undefined}
+            action={localPrice == null && needsEconomy && onConfigureEconomy ? <Button type="button" variant="ghost" onClick={onConfigureEconomy}><Settings2 size={14} /> Completar datos</Button> : undefined}
           />
           <PriceCard
             icon={<MapPin size={19} />}

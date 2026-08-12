@@ -37,8 +37,17 @@ describe("ResultInspector", () => {
     const result: ProjectResult = { services: [{ service, result: serviceResult }], totalMinor: null, totalHours: 36, externalCostsMinor: 0, effectiveHourlyMinor: null, marginMicros: null, pricingTiers: { floorMinor: null, recommendedMinor: null, premiumMinor: null }, unpricedCount: 1, isPartial: false };
     render(<ResultInspector currency="ARS" activeServiceId="service" suggestionsEnabled market={null} marketJob={null} onUpdateMarket={async () => undefined} onCancelMarket={async () => undefined} onConfigureEconomy={onConfigureEconomy} result={result} />);
     expect(screen.getByText("El precio local está pendiente")).toBeInTheDocument();
-    expect(screen.getByText("Configurá tu tarifa base en ARS.")).toBeInTheDocument();
+    expect(screen.getAllByText("Configurá tu tarifa base en ARS.").length).toBeGreaterThan(0);
     fireEvent.click(screen.getByRole("button", { name: /completar datos/i }));
     expect(onConfigureEconomy).toHaveBeenCalledOnce();
+  });
+
+  it("no culpa a la economía cuando falta un dato del alcance", () => {
+    const service: QuoteService = { id: "service", quoteId: "quote", serviceType: "print-design", title: "Estampa", sortOrder: 0, configurationVersion: 2, configurationJson: "{}", calculatedSubtotalMinor: null, suggestedSubtotalMinor: null, finalSubtotalMinor: null, hasOverride: false, manualSubtotalMinor: null, manualReason: null, pricingSnapshotJson: null, serviceDefinitionVersion: 1, rowRevision: 0, deletedAt: null, createdAt: "", updatedAt: "" };
+    const serviceResult: ServiceResult = { status: "incomplete", calculatedSubtotalMinor: null, suggestedSubtotalMinor: null, finalSubtotalMinor: null, effectiveSubtotalMinor: null, hasOverride: false, hours: 14.75, externalCostsMinor: 0, effectiveHourlyMinor: null, appliedMarginMicros: null, lines: [], issues: ["Completá “Origen del diseño”."] };
+    const result: ProjectResult = { services: [{ service, result: serviceResult }], totalMinor: null, totalHours: 14.75, externalCostsMinor: 0, effectiveHourlyMinor: null, marginMicros: null, pricingTiers: { floorMinor: null, recommendedMinor: null, premiumMinor: null }, unpricedCount: 1, isPartial: false };
+    render(<ResultInspector currency="ARS" activeServiceId="service" suggestionsEnabled market={null} marketJob={null} onUpdateMarket={async () => undefined} onCancelMarket={async () => undefined} onConfigureEconomy={vi.fn()} result={result} />);
+    expect(screen.getAllByText("Completá “Origen del diseño”.").length).toBeGreaterThan(0);
+    expect(screen.queryByRole("button", { name: /completar datos/i })).not.toBeInTheDocument();
   });
 });

@@ -70,17 +70,19 @@ function durationMinutes(value: unknown) {
 export function buildMarketQueryContext(service: QuoteService, scope: "argentina" | "international" | "both" | null): MarketQueryContext {
   const envelope = JSON.parse(service.configurationJson) as { data?: Record<string, unknown> & { parameterValues?: Record<string, unknown> } };
   const data = envelope.data ?? {};
-  const values = service.serviceType === "programming" ? data.parameterValues ?? {} : data;
+  const values = data.parameterValues ?? data;
   const string = (key: string) => typeof values[key] === "string" && values[key] ? String(values[key]) : null;
   const number = (key: string) => typeof values[key] === "number" && Number.isFinite(values[key]) ? Number(values[key]) : null;
   const regions = scope === "argentina" ? ["AR"] : scope === "international" ? ["INTERNATIONAL"] : ["AR", "LATAM", "INTERNATIONAL"];
   const allowedFeatures = service.serviceType === "video-editing"
     ? new Set(["resolution", "editingLevel", "revisions", "urgency", "formats", "color", "audio", "subtitles", "videoAi", "voiceAi", "soundAi", "backgroundRemoval", "motion", "broll", "additionalVersions"])
-    : new Set(["projectType", "frontend", "backend", "database", "auth", "integrations", "screens", "responsive", "deploy", "ai", "complexity"]);
+    : service.serviceType === "print-design"
+      ? new Set(["mainWorkType", "additionalOperations", "complexity", "inputQuality", "backgroundLevel", "restorationLevel", "vectorizationLevel", "compositionLevel", "aiLevel", "typographyLevel", "colorLevel", "printOutput", "halftoneLevel", "elementCountBand", "initialProposals", "includedRevisions", "variantLevel", "editableDelivery", "urgency", "designOrigin"])
+      : new Set(["projectType", "frontend", "backend", "database", "auth", "integrations", "screens", "responsive", "deploy", "ai", "complexity"]);
   const features = Object.entries(values).filter(([key, value]) => allowedFeatures.has(key) && (value === true || (Array.isArray(value) && value.length > 0) || (typeof value === "string" && !["", "none", "basic", "normal"].includes(value)))).map(([key]) => key);
   return {
     service: service.serviceType,
-    subtype: string(service.serviceType === "video-editing" ? "pieceType" : "projectType"),
+    subtype: string(service.serviceType === "video-editing" ? "pieceType" : service.serviceType === "print-design" ? "mainWorkType" : "projectType"),
     regionTargets: regions,
     level: string(service.serviceType === "video-editing" ? "editingLevel" : "complexity"),
     durationMinutes: durationMinutes(values.finalDuration),

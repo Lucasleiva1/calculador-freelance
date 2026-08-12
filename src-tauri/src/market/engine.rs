@@ -96,6 +96,14 @@ async fn participating_sources(
     service_type: &str,
     sources: &[MarketSource],
 ) -> AppResult<HashSet<String>> {
+    let assignment_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM pricing_engine_sources pes
+         JOIN pricing_engines pe ON pe.id=pes.engine_id
+         WHERE pe.engine_key=? AND pes.preference<>'excluded'",
+    )
+    .bind(service_type)
+    .fetch_one(pool)
+    .await?;
     let assigned: Vec<String> = sqlx::query_scalar(
         "SELECT pes.source_id FROM pricing_engine_sources pes
          JOIN pricing_engines pe ON pe.id=pes.engine_id
@@ -111,7 +119,7 @@ async fn participating_sources(
     .bind(service_type)
     .fetch_all(pool)
     .await?;
-    if !assigned.is_empty() {
+    if assignment_count > 0 {
         return Ok(assigned.into_iter().collect());
     }
     Ok(sources
@@ -292,10 +300,15 @@ fn converted_midpoint(
 
 fn source_request_url(source: &MarketSource, context: &MarketQueryContext) -> AppResult<String> {
     if source.adapter_key.as_deref() == Some("upwork") {
-        return Ok(if context.service == "video-editing" {
-            "https://www.upwork.com/hire/video-editors/cost/"
-        } else {
-            "https://www.upwork.com/hire/software-developers/cost/"
+        return Ok(match context.service.as_str() {
+            "video-editing" => "https://www.upwork.com/hire/video-editors/cost/",
+            "programming" => "https://www.upwork.com/hire/software-developers/cost/",
+            "print-design" => "https://www.upwork.com/hire/graphic-designers/cost/",
+            _ => {
+                return Err(AppError::Validation(
+                    "Upwork no tiene una especialidad aprobada para este motor.".into(),
+                ))
+            }
         }
         .into());
     }
@@ -796,16 +809,12 @@ fn query_context(
 ) -> MarketQueryContext {
     let json: Value = serde_json::from_str(configuration_json).unwrap_or(Value::Null);
     let data = json.get("data").unwrap_or(&Value::Null);
-    let values = if service_type == "programming" {
-        data.get("parameterValues").unwrap_or(data)
-    } else {
-        data
-    };
+    let values = data.get("parameterValues").unwrap_or(data);
     let subtype = values
-        .get(if service_type == "video-editing" {
-            "pieceType"
-        } else {
-            "projectType"
+        .get(match service_type {
+            "video-editing" => "pieceType",
+            "print-design" => "mainWorkType",
+            _ => "projectType",
         })
         .and_then(Value::as_str)
         .map(str::to_string);
@@ -844,6 +853,29 @@ fn query_context(
             "motion",
             "broll",
             "additionalVersions",
+        ]
+    } else if service_type == "print-design" {
+        &[
+            "mainWorkType",
+            "additionalOperations",
+            "complexity",
+            "inputQuality",
+            "backgroundLevel",
+            "restorationLevel",
+            "vectorizationLevel",
+            "compositionLevel",
+            "aiLevel",
+            "typographyLevel",
+            "colorLevel",
+            "printOutput",
+            "halftoneLevel",
+            "elementCountBand",
+            "initialProposals",
+            "includedRevisions",
+            "variantLevel",
+            "editableDelivery",
+            "urgency",
+            "designOrigin",
         ]
     } else {
         &[
@@ -1179,9 +1211,9 @@ async fn run_research_inner(state: &AppState, job_id: &str, force: bool) -> AppR
         local_summary.explanations.push(
             "No hay fuentes de precio de mercado verificadas para sugerir. Las de moneda, salarios y metodología quedan sólo como contexto.".into(),
         );
-        international_summary.explanations.push(
-            "No hay fuentes internacionales verificadas para sugerir.".into(),
-        );
+        international_summary
+            .explanations
+            .push("No hay fuentes internacionales verificadas para sugerir.".into());
     }
     let settings =
         sqlx::query("SELECT suggestions_enabled, suggestion_strategy FROM app_settings WHERE id=1")
@@ -1386,6 +1418,19 @@ mod tests {
     }
 
     #[test]
+    fn print_design_context_uses_its_own_professional_parameters() {
+        let json = r#"{"data":{"parameterValues":{"mainWorkType":"vector-corrected","complexity":"high","printOutput":["dtf"],"editableDelivery":"ai","estimatedHours":3.5,"projectType":"must-not-leak"}}}"#;
+        let context = query_context("print-design", json, Some("both"));
+        assert_eq!(context.service, "print-design");
+        assert_eq!(context.subtype.as_deref(), Some("vector-corrected"));
+        assert_eq!(context.level.as_deref(), Some("high"));
+        assert_eq!(context.estimated_hours, Some(3.5));
+        assert!(context.features.contains(&"printOutput".into()));
+        assert!(context.features.contains(&"editableDelivery".into()));
+        assert!(!context.features.contains(&"projectType".into()));
+    }
+
+    #[test]
     fn cooldown_recognizes_future_and_expired_dates() {
         let future = (Utc::now() + Duration::hours(2)).to_rfc3339();
         let expired = (Utc::now() - Duration::hours(2)).to_rfc3339();
@@ -1528,7 +1573,9 @@ mod tests {
             assert_eq!(
                 automatic,
                 vec![
+                    ("ardg-print-design".into(), true),
                     ("bcra".into(), false),
+                    ("freelancerateiq-print-design".into(), true),
                     ("golance".into(), true),
                     ("indexdev".into(), true),
                     ("prolatam-programming-ar".into(), true),
@@ -1536,6 +1583,7 @@ mod tests {
                     ("reelrate".into(), true),
                     ("remoteok".into(), false),
                     ("solopricing".into(), true),
+                    ("twine-print-design".into(), true),
                 ]
             );
         });

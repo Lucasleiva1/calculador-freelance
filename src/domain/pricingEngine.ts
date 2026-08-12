@@ -58,6 +58,12 @@ export function activeHourlyRate(profile: EconomicProfile | null): number | null
   return profile?.manualHourlyRateMinor ?? calculateSustainableRate(profile).rateMinor;
 }
 
+export function economicProfileFor(pricing: PricingConfiguration, serviceType: string, currency: Currency): EconomicProfile | null {
+  const engine = pricing.pricingEngines.find((item) => item.engineKey === serviceType && item.status === "active");
+  if (!engine) return null;
+  return pricing.economicProfiles.find((item) => item.engineId === engine.id && item.currency === currency) ?? null;
+}
+
 function numeric(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   if (typeof value === "string" && value.trim() && Number.isFinite(Number(value.replace(",", ".")))) return Number(value.replace(",", "."));
@@ -99,7 +105,7 @@ export function runPricingEngine(input: EngineInput): ServiceResult {
   const parameters = input.pricing.parameters.filter((item) => item.serviceDefinitionId === definition.id && item.enabled);
   const options = input.pricing.options.filter((item) => parameters.some((parameter) => parameter.id === item.parameterId) && item.enabled);
   const rules = input.pricing.rules.filter((item) => item.serviceDefinitionId === definition.id && item.enabled).sort((a, b) => a.sortOrder - b.sortOrder);
-  const profile = input.pricing.economicProfiles.find((item) => item.currency === input.currency) ?? null;
+  const profile = economicProfileFor(input.pricing, input.serviceType, input.currency);
   const hourlyRateMinor = activeHourlyRate(profile);
   const issues: string[] = [];
   const lines: PriceLine[] = [];
@@ -226,7 +232,7 @@ export function createPricingSnapshot(input: EngineInput, result: ServiceResult)
     serviceType: input.serviceType, definition, parameters,
     options: input.pricing.options.filter((item) => parameters.some((parameter) => parameter.id === item.parameterId)),
     rules: input.pricing.rules.filter((item) => item.serviceDefinitionId === definition.id),
-    economicProfile: input.pricing.economicProfiles.find((item) => item.currency === input.currency) ?? null,
+    economicProfile: economicProfileFor(input.pricing, input.serviceType, input.currency),
     settings: { suggestionsEnabled: input.settings.suggestionsEnabled, suggestionStrategy: input.settings.suggestionStrategy, usdToArsMicros: input.settings.usdToArsMicros },
     parameterValues: input.parameterValues, result,
   };

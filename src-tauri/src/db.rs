@@ -89,10 +89,46 @@ mod tests {
                 .fetch_one(&pool)
                 .await
                 .expect("profiles");
-            assert_eq!(definitions, 2);
-            assert!(parameters >= 30);
+            let engine_profiles: i64 =
+                sqlx::query_scalar("SELECT COUNT(*) FROM engine_economic_profiles")
+                    .fetch_one(&pool)
+                    .await
+                    .expect("engine profiles");
+            let programming_profiles: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM engine_economic_profiles WHERE engine_id='engine-programming'")
+                .fetch_one(&pool)
+                .await
+                .expect("programming profiles");
+            let print_design_profiles: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM engine_economic_profiles WHERE engine_id='engine-print-design'")
+                .fetch_one(&pool)
+                .await
+                .expect("print design profiles");
+            assert_eq!(definitions, 3);
+            assert!(parameters >= 70);
             assert!(sources >= 40);
             assert_eq!(profiles, 2);
+            assert_eq!(engine_profiles, 2);
+            assert_eq!(programming_profiles, 0);
+            assert_eq!(print_design_profiles, 0);
+            let print_parameters: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM service_parameters WHERE service_definition_id='service-print-design'")
+                .fetch_one(&pool)
+                .await
+                .expect("print design parameters");
+            let forbidden_options: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM parameter_options WHERE parameter_id IN (SELECT id FROM service_parameters WHERE service_definition_id='service-print-design') AND (lower(label) LIKE '%serigraf%' OR lower(value) LIKE '%serigraf%')")
+                .fetch_one(&pool)
+                .await
+                .expect("forbidden print options");
+            let print_suggestion_sources: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM pricing_engine_sources WHERE engine_id='engine-print-design' AND participates_in_suggestions=1")
+                .fetch_one(&pool)
+                .await
+                .expect("print suggestion sources");
+            assert_eq!(print_parameters, 50);
+            assert_eq!(forbidden_options, 0);
+            assert_eq!(print_suggestion_sources, 3);
+            let print_seed_observations: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM market_observations WHERE source_id='source-ardg-print-design' AND service_type='print-design' AND comparison_eligibility='ELIGIBLE'")
+                .fetch_one(&pool)
+                .await
+                .expect("print seed observations");
+            assert_eq!(print_seed_observations, 6);
             let categories: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM engine_categories")
                 .fetch_one(&pool)
                 .await
@@ -107,7 +143,7 @@ mod tests {
                     .await
                     .expect("local ai setting");
             assert!(categories >= 10);
-            assert_eq!(engines, 2);
+            assert_eq!(engines, 3);
             assert!(!ai_enabled, "la IA local debe comenzar desactivada");
             let automatic_sources: i64 = sqlx::query_scalar(
                 "SELECT COUNT(*) FROM market_sources WHERE acquisition_mode='auto_http' AND automation_status='APPROVED'",
@@ -118,7 +154,7 @@ mod tests {
             // BCRA aporta cambio; ProLatamWork aporta Argentina; ReelRate,
             // SoloPricing, Index.dev y goLance aportan internacional; Remote OK
             // conserva el contexto salarial separado.
-            assert_eq!(automatic_sources, 8);
+            assert_eq!(automatic_sources, 11);
             let automatic_keys: Vec<String> = sqlx::query_scalar(
                 "SELECT system_key FROM market_sources WHERE acquisition_mode='auto_http' AND automation_status='APPROVED' ORDER BY system_key",
             )
@@ -128,14 +164,17 @@ mod tests {
             assert_eq!(
                 automatic_keys,
                 vec![
+                    "ardg-print-design",
                     "bcra",
+                    "freelancerateiq-print-design",
                     "golance",
                     "indexdev",
                     "prolatam-programming-ar",
                     "prolatam-video-ar",
                     "reelrate",
                     "remoteok",
-                    "solopricing"
+                    "solopricing",
+                    "twine-print-design"
                 ]
             );
             let (upwork_url, upwork_status, upwork_automation): (String, String, String) =

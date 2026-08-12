@@ -19,9 +19,15 @@ pub fn run() {
             let state = tauri::async_runtime::block_on(db::initialize(app.handle()))
                 .map_err(|error| Box::<dyn std::error::Error>::from(error.to_string()))?;
             app.manage(state);
+            if let Some(window) = app.get_webview_window("main") {
+                window.show()?;
+                window.unminimize()?;
+                window.set_focus()?;
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::exit_application,
             commands::bootstrap_app,
             commands::load_workspace,
             commands::create_project,

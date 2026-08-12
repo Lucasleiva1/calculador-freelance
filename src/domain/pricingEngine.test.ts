@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { applySuggestedDefaults, calculateSustainableRate, createPricingSnapshot, resultFromService, runPricingEngine } from "./pricingEngine";
-import type { AppSettings, EconomicProfile, ParameterOption, PricingConfiguration, PricingRule, QuoteService, ServiceDefinition, ServiceParameter } from "./types";
+import type { AppSettings, EconomicProfile, ParameterOption, PricingConfiguration, PricingEngine, PricingRule, QuoteService, ServiceDefinition, ServiceParameter } from "./types";
 
 const stamp = "2026-08-09T00:00:00Z";
 const definition: ServiceDefinition = { id: "service-programming", serviceType: "programming", name: "Programación", description: null, version: 4, enabled: true, suggestionsEnabled: true, defaultStrategy: "balanced", competitiveMarginMicros: 100_000, balancedMarginMicros: 200_000, premiumMarginMicros: 250_000, createdAt: stamp, updatedAt: stamp };
@@ -10,7 +10,8 @@ const quantity = parameter("quantity", "quantity");
 const plan = parameter("plan", "plan", "single_select");
 const option: ParameterOption = { id: "premium", parameterId: plan.id, label: "Premium", value: "premium", sortOrder: 1, enabled: true, createdAt: stamp, updatedAt: stamp };
 const rule = (id: string, ruleType: PricingRule["ruleType"], partial: Partial<PricingRule> = {}): PricingRule => ({ id, serviceDefinitionId: definition.id, parameterId: plan.id, optionId: option.id, quantityParameterId: null, name: id, ruleType, numericValueMicros: null, amountArsMinor: null, amountUsdMinor: null, sortOrder: 1, enabled: true, version: 1, createdAt: stamp, updatedAt: stamp, ...partial });
-const profile: EconomicProfile = { currency: "USD", monthlyIncomeTargetMinor: null, monthlyExpensesMinor: null, billableHoursMicros: null, reserveTaxMicros: null, desiredMarginMicros: 200_000, defaultUrgencyMicros: null, workDays: null, vacationWeeks: null, manualHourlyRateMinor: 10_000, updatedAt: stamp };
+const engine: PricingEngine = { id: "engine-programming", engineKey: "programming", name: "Programación", description: null, engineType: "service", categoryId: null, calculatorKey: "professional-service-v1", serviceDefinitionId: definition.id, unitKind: "hour", tagsJson: "[]", status: "active", classificationOrigin: "automatic", classificationConfidenceMicros: null, classificationExplanation: null, classificationVersion: 1, isSystem: true, createdAt: stamp, updatedAt: stamp, archivedAt: null };
+const profile: EconomicProfile = { engineId: engine.id, currency: "USD", monthlyIncomeTargetMinor: null, monthlyExpensesMinor: null, billableHoursMicros: null, reserveTaxMicros: null, desiredMarginMicros: 200_000, defaultUrgencyMicros: null, workDays: null, vacationWeeks: null, manualHourlyRateMinor: 10_000, updatedAt: stamp };
 const settings: AppSettings = { theme: "warm", hourlyRateArsMinor: null, hourlyRateUsdMinor: 10_000, usdToArsMicros: null, activeProjectId: null, suggestionsEnabled: true, suggestionStrategy: "premium", baseCurrency: "USD", helpMode: "guided", localAiEnabled: false, ollamaBaseUrl: "http://127.0.0.1:11434", ollamaModel: null, aiAutoApplyHighConfidence: false, updatedAt: stamp };
 const rules: PricingRule[] = [
   rule("fijo", "fixed_amount", { amountUsdMinor: 1_000, sortOrder: 1 }),
@@ -20,7 +21,7 @@ const rules: PricingRule[] = [
   rule("multiplicador", "multiplier", { numericValueMicros: 1_500_000, sortOrder: 5 }),
   rule("tercero", "external_cost", { amountUsdMinor: 500, sortOrder: 6 }),
 ];
-const pricing: PricingConfiguration = { definitions: [definition], parameters: [hours, quantity, plan], options: [option], rules, economicProfiles: [profile], marketSources: [], engineCategories: [], pricingEngines: [], engineSources: [] };
+const pricing: PricingConfiguration = { definitions: [definition], parameters: [hours, quantity, plan], options: [option], rules, economicProfiles: [profile], marketSources: [], engineCategories: [], pricingEngines: [engine], engineSources: [] };
 const input = { serviceType: "programming" as const, currency: "USD" as const, parameterValues: { estimatedHours: 2, quantity: 3, plan: "premium" }, settings, pricing };
 
 describe("PricingEngine configurable", () => {
@@ -80,5 +81,20 @@ describe("economía sostenible", () => {
     const result = calculateSustainableRate({ ...profile, monthlyIncomeTargetMinor: 100_000, monthlyExpensesMinor: 20_000, billableHoursMicros: 100_000_000, reserveTaxMicros: 200_000 });
     expect(result.monthlyRequiredMinor).toBe(150_000);
     expect(result.rateMinor).toBe(1_500);
+  });
+
+  it("no hereda la tarifa de programación en Diseño de estampas", () => {
+    const printDefinition: ServiceDefinition = { ...definition, id: "service-print-design", serviceType: "print-design", name: "Diseño de estampas" };
+    const printHours = { ...hours, id: "print-hours", serviceDefinitionId: printDefinition.id };
+    const printEngine: PricingEngine = { ...engine, id: "engine-print-design", engineKey: "print-design", name: "Diseño de estampas", serviceDefinitionId: printDefinition.id };
+    const isolatedPricing: PricingConfiguration = { ...pricing, definitions: [definition, printDefinition], parameters: [hours, printHours], options: [], rules: [], pricingEngines: [engine, printEngine], economicProfiles: [profile] };
+    const missing = runPricingEngine({ serviceType: "print-design", currency: "USD", parameterValues: { estimatedHours: 2.5 }, settings, pricing: isolatedPricing });
+    expect(missing.status).toBe("incomplete");
+    expect(missing.calculatedSubtotalMinor).toBeNull();
+    expect(missing.issues).toContain("Configurá tu economía en USD.");
+
+    const ownProfile: EconomicProfile = { ...profile, engineId: printEngine.id, desiredMarginMicros: null, manualHourlyRateMinor: 2_500 };
+    const ready = runPricingEngine({ serviceType: "print-design", currency: "USD", parameterValues: { estimatedHours: 2.5 }, settings, pricing: { ...isolatedPricing, economicProfiles: [profile, ownProfile] } });
+    expect(ready.calculatedSubtotalMinor).toBe(6_250);
   });
 });

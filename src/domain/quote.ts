@@ -1,9 +1,10 @@
 import type { AppSettings, PricingConfiguration, QuoteService, ServiceResult, Workspace } from "./types";
 import { parseProgrammingEnvelope } from "./programming";
+import { parseProfessionalEnvelope } from "./professional";
 import { parseVideoEnvelope } from "./video";
 import type { HybridConfiguration, ProductConfiguration } from "./product";
 import { calculateHybrid, calculateProduct } from "./product";
-import { activeHourlyRate, emptyResult, resultFromService, runPricingEngine } from "./pricingEngine";
+import { activeHourlyRate, economicProfileFor, emptyResult, resultFromService, runPricingEngine } from "./pricingEngine";
 import type { ServiceConfigurationEnvelope } from "./types";
 
 export interface EvaluatedService { service: QuoteService; result: ServiceResult; }
@@ -23,17 +24,30 @@ function liveResult(service: QuoteService, workspace: Workspace, settings: AppSe
     const engine = pricing.pricingEngines.find((item) => item.engineKey === service.serviceType);
     if (engine?.calculatorKey === "physical-product-v1" || engine?.calculatorKey === "hybrid-v1") {
       const config = (JSON.parse(service.configurationJson) as ServiceConfigurationEnvelope<ProductConfiguration | HybridConfiguration>).data;
-      const profile = pricing.economicProfiles.find((item) => item.currency === workspace.quote.currency) ?? null;
+      const profile = economicProfileFor(pricing, service.serviceType, workspace.quote.currency);
       const context = { currency: workspace.quote.currency, hourlyRateMinor: activeHourlyRate(profile), usdToArsMicros: settings.usdToArsMicros };
       return engine.calculatorKey === "hybrid-v1" ? calculateHybrid(config as HybridConfiguration, context) : calculateProduct(config, context);
     }
-    const config = parseProgrammingEnvelope(service.configurationJson).data;
+    const config = service.serviceType === "programming"
+      ? parseProgrammingEnvelope(service.configurationJson).data
+      : parseProfessionalEnvelope(service.configurationJson, service.serviceType).data;
     return runPricingEngine({ serviceType: service.serviceType, currency: workspace.quote.currency, parameterValues: config.parameterValues, externalCosts: config.externalCosts, finalOverrideMinor: service.finalSubtotalMinor ?? service.manualSubtotalMinor, hasOverride: service.hasOverride || service.manualSubtotalMinor != null, settings, pricing });
   } catch { return emptyResult("La configuración guardada no se pudo leer."); }
 }
 
+function manualEconomyIsMissing(service: QuoteService, workspace: Workspace, pricing: PricingConfiguration) {
+  const engine = pricing.pricingEngines.find((item) => item.engineKey === service.serviceType && item.status === "active");
+  if (!engine || !["professional-service-v1", "hybrid-v1"].includes(engine.calculatorKey)) return false;
+  return economicProfileFor(pricing, service.serviceType, workspace.quote.currency) == null;
+}
+
 export function evaluateWorkspace(workspace: Workspace, settings: AppSettings, pricing: PricingConfiguration): ProjectResult {
-  const services = workspace.services.map((service): EvaluatedService => ({ service, result: resultFromService(service) ?? liveResult(service, workspace, settings, pricing) }));
+  const services = workspace.services.map((service): EvaluatedService => ({
+    service,
+    result: manualEconomyIsMissing(service, workspace, pricing)
+      ? liveResult(service, workspace, settings, pricing)
+      : resultFromService(service) ?? liveResult(service, workspace, settings, pricing),
+  }));
   const priced = services.filter(({ result }) => result.finalSubtotalMinor != null);
   const unpricedCount = services.length - priced.length;
   const totalMinor = priced.length === 0 ? null : priced.reduce((sum, item) => sum + (item.result.finalSubtotalMinor ?? 0), 0);

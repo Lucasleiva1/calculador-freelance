@@ -1,29 +1,17 @@
-import type { Currency, ServiceConfigurationEnvelope } from "./types";
-import type { ExternalCost } from "./video";
+import type { ServiceConfigurationEnvelope } from "./types";
+import {
+  defaultProfessionalConfiguration,
+  emptyExternalCost,
+  parseProfessionalEnvelope,
+  type ProfessionalServiceConfiguration,
+} from "./professional";
 
-export interface ProgrammingConfiguration {
-  parameterValues: Record<string, unknown>;
-  externalCosts: ExternalCost[];
-  notes: string;
-}
+export type ProgrammingConfiguration = ProfessionalServiceConfiguration;
 
-export const defaultProgrammingConfiguration = (): ProgrammingConfiguration => ({
-  parameterValues: {}, externalCosts: [], notes: "",
-});
+export const defaultProgrammingConfiguration = defaultProfessionalConfiguration;
 
 export function parseProgrammingEnvelope(json: string): ServiceConfigurationEnvelope<ProgrammingConfiguration> {
-  const parsed = JSON.parse(json) as ServiceConfigurationEnvelope<Partial<ProgrammingConfiguration> & { category?: string }>;
-  const data = parsed.data ?? {};
-  return {
-    schemaVersion: 2,
-    serviceType: "programming",
-    data: {
-      ...defaultProgrammingConfiguration(),
-      ...data,
-      parameterValues: data.parameterValues ?? (data.category ? { projectType: data.category } : {}),
-      externalCosts: data.externalCosts ?? [],
-    },
-  };
+  return parseProfessionalEnvelope(json, "programming");
 }
 
 export function programmingSummary(config: ProgrammingConfiguration) {
@@ -37,6 +25,4 @@ export function programmingSummary(config: ProgrammingConfiguration) {
   return [type, effort];
 }
 
-export function emptyExternalCost(currency: Currency): ExternalCost {
-  return { id: crypto.randomUUID(), name: "", amountMinor: 0, currency, note: "" };
-}
+export { emptyExternalCost };

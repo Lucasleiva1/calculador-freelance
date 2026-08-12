@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { ArrowDown, ArrowUp, Blend, Calculator, CircleAlert, CircleCheck, Code2, Film, FileOutput, FileText, Package, Plus, Settings2, Trash2 } from "lucide-react";
+import { ArrowDown, ArrowUp, Blend, Calculator, CircleAlert, CircleCheck, Code2, Film, FileOutput, FileText, Package, Plus, Save, Settings2, Shirt, Trash2 } from "lucide-react";
 import type {
   AppSettings,
   MarketOverview,
@@ -16,11 +16,13 @@ import type { VideoConfiguration } from "../../domain/video";
 import type { ProgrammingConfiguration } from "../../domain/programming";
 import type { HybridConfiguration, ProductConfiguration } from "../../domain/product";
 import { parseProgrammingEnvelope } from "../../domain/programming";
+import { parseProfessionalEnvelope } from "../../domain/professional";
 import { DynamicFields } from "../../components/DynamicFields";
 import type { ProjectResult } from "../../domain/quote";
 import { formatMoney } from "../../domain/money";
 import { VideoEditor } from "../video/VideoEditor";
 import { ProgrammingEditor } from "../programming/ProgrammingEditor";
+import { PrintDesignEditor } from "../print-design/PrintDesignEditor";
 import { ProductEditor } from "../product/ProductEditor";
 import { ResultInspector } from "../../components/ResultInspector";
 import { Button, EmptyState, StatusDot } from "../../components/ui";
@@ -122,7 +124,7 @@ export function WorkspaceView({
   }, [active]);
   const programmingConfig = useMemo(() => {
     if (!active || active.serviceType === "video-editing" || activeEngine?.calculatorKey !== "professional-service-v1") return null;
-    try { return parseProgrammingEnvelope(active.configurationJson).data; }
+    try { return active.serviceType === "programming" ? parseProgrammingEnvelope(active.configurationJson).data : parseProfessionalEnvelope(active.configurationJson, active.serviceType).data; }
     catch { return { parameterValues: {}, externalCosts: [], notes: "" }; }
   }, [active, activeEngine?.calculatorKey]);
   const productConfig = useMemo(() => {
@@ -157,6 +159,7 @@ export function WorkspaceView({
 
   function EngineIcon({ type, size = 16 }: { type: string; size?: number }) {
     if (type === "video-editing") return <Film size={size} />;
+    if (type === "print-design") return <Shirt size={size} />;
     const engine = pricing.pricingEngines.find((item) => item.engineKey === type);
     if (engine?.engineType === "product") return <Package size={size} />;
     if (engine?.engineType === "hybrid") return <Blend size={size} />;
@@ -183,13 +186,22 @@ export function WorkspaceView({
           {isMarketUpdating && <p id="market-update-lock" className="market-update-lock" role="status"><CircleAlert size={17} aria-hidden="true" /> Actualizando la referencia de mercado. Tus parámetros quedan bloqueados para conservar exactamente los valores que cargaste.</p>}
           <fieldset className="service-editor" disabled={isMarketUpdating} aria-describedby={isMarketUpdating ? "market-update-lock" : undefined}><legend className="sr-only">Campos editables del módulo</legend>
             {active.serviceType === "video-editing" && videoConfig && <><VideoEditor service={active} config={videoConfig} currency={workspace.quote.currency} presets={presets.filter((preset) => preset.serviceType === "video-editing")} onChange={(config, manual, reason, immediate) => onVideoChange(active, config, manual, reason, immediate)} onSavePreset={onSavePreset} onUpdatePreset={onUpdatePreset} onDeletePreset={onDeletePreset} onRestorePreset={onRestorePreset} />{pricing.parameters.some((item) => item.serviceDefinitionId === pricing.definitions.find((definition) => definition.serviceType === "video-editing")?.id && !item.uiManaged && item.enabled) && <section className="editor-section"><span className="eyebrow">Parámetros personalizados</span><DynamicFields parameters={pricing.parameters.filter((item) => item.serviceDefinitionId === pricing.definitions.find((definition) => definition.serviceType === "video-editing")?.id && !item.uiManaged)} options={pricing.options} values={videoConfig as unknown as Record<string, unknown>} suggestionsEnabled={settings.suggestionsEnabled} onChange={(values) => onVideoChange(active, values as unknown as VideoConfiguration)} /></section>}</>}
-            {active.serviceType !== "video-editing" && activeEngine?.calculatorKey === "professional-service-v1" && programmingConfig && <ProgrammingEditor service={active} config={programmingConfig} currency={workspace.quote.currency} pricing={pricing} suggestionsEnabled={settings.suggestionsEnabled} onChange={(config) => onProgrammingChange(active, config)} />}
+            {active.serviceType === "print-design" && activeEngine?.calculatorKey === "professional-service-v1" && programmingConfig && <PrintDesignEditor service={active} clientName={workspace.project.clientName} config={programmingConfig} pricing={pricing} suggestionsEnabled={settings.suggestionsEnabled} onChange={(config) => onProgrammingChange(active, config)} />}
+            {active.serviceType !== "video-editing" && active.serviceType !== "print-design" && activeEngine?.calculatorKey === "professional-service-v1" && programmingConfig && <ProgrammingEditor service={active} config={programmingConfig} currency={workspace.quote.currency} pricing={pricing} suggestionsEnabled={settings.suggestionsEnabled} onChange={(config) => onProgrammingChange(active, config)} />}
             {productConfig && activeEngine && <ProductEditor config={productConfig} currency={workspace.quote.currency} hybrid={activeEngine.calculatorKey === "hybrid-v1"} result={activeResult} onChange={(config, immediate) => onGenericEngineChange(active, config, immediate)} />}
           </fieldset>
         </section>}
       </div>
     </main>
     <ResultInspector key={activeServiceId ?? "empty"} result={result} currency={workspace.quote.currency} activeServiceId={activeServiceId} suggestionsEnabled={settings.suggestionsEnabled} usdToArsMicros={settings.usdToArsMicros} market={market} marketJob={marketJob} onUpdateMarket={onUpdateMarket} onCancelMarket={onCancelMarket} onConfigureEconomy={onConfigureEconomy} onFinalPriceChange={active ? (final, reason) => onFinalPriceChange(active, final, reason) : undefined} />
-    <footer className="actionbar"><div className="actionbar__summary"><FileOutput size={20} /><span>Resumen del proyecto</span><i /><strong>{workspace.services.length} {workspace.services.length === 1 ? "módulo" : "módulos"}</strong><StatusDot /><i /><span>{result.isPartial ? "Subtotal parcial" : "Total"}</span><b>{formatMoney(result.totalMinor, workspace.quote.currency)}</b></div><div className="actionbar__actions"><Button onClick={() => void onSaveQuote()}>{workspace.quote.snapshotRevision > 0 ? "Guardar revisión" : "Guardar cotización"}</Button><Button type="button" variant={activeIsReady ? "default" : "accent"} onClick={() => void calculateAndReveal()} disabled={!active || calculating || isMarketUpdating}><Calculator size={16} /> {calculating ? "Calculando…" : "Calcular los 3 precios"}</Button><Button type="button" variant="accent" onClick={() => void onGenerateDocument?.()} disabled={!projectReadyForDocument || !onGenerateDocument || documentBusy || isMarketUpdating} title={!projectReadyForDocument ? "Completá todos los módulos antes de preparar el presupuesto." : undefined}><FileText size={16} /> {documentBusy ? "Preparando…" : documentReady ? "Abrir presupuesto / PDF" : "Generar presupuesto / PDF"}</Button></div></footer>
+    <footer className="actionbar">
+      <div className="actionbar__summary"><FileOutput size={20} /><span>Resumen del proyecto</span><i /><strong>{workspace.services.length} {workspace.services.length === 1 ? "módulo" : "módulos"}</strong><StatusDot /></div>
+      <div className="actionbar__actions">
+        <Button className="actionbar__icon-action" aria-label={workspace.quote.snapshotRevision > 0 ? "Guardar revisión" : "Guardar cotización"} title={workspace.quote.snapshotRevision > 0 ? "Guardar esta revisión en el historial" : "Guardar esta cotización en el historial"} onClick={() => void onSaveQuote()}><Save size={18} /></Button>
+        <Button className="actionbar__primary-action" type="button" variant="accent" onClick={() => void calculateAndReveal()} disabled={!active || calculating || isMarketUpdating}><Calculator size={18} /> {calculating ? "Calculando…" : "Calcular los 3 precios"}</Button>
+        <Button className="actionbar__icon-action" type="button" aria-label={documentReady ? "Abrir presupuesto o PDF" : "Generar presupuesto o PDF"} onClick={() => void onGenerateDocument?.()} disabled={!projectReadyForDocument || !onGenerateDocument || documentBusy || isMarketUpdating} title={!projectReadyForDocument ? "Completá todos los módulos antes de preparar el presupuesto" : documentReady ? "Abrir presupuesto o PDF" : "Generar presupuesto o PDF"}><FileText size={18} /></Button>
+      </div>
+      <div className="actionbar__total"><span>{result.isPartial ? "Subtotal parcial" : "Total"}</span><b>{formatMoney(result.totalMinor, workspace.quote.currency)}</b></div>
+    </footer>
   </div>;
 }

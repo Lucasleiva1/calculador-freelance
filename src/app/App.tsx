@@ -20,10 +20,11 @@ import type {
 } from "../domain/types";
 import { parseVideoEnvelope, type VideoConfiguration } from "../domain/video";
 import { parseProgrammingEnvelope, type ProgrammingConfiguration } from "../domain/programming";
+import { parseProfessionalEnvelope } from "../domain/professional";
 import type { HybridConfiguration, ProductConfiguration } from "../domain/product";
 import { calculateHybrid, calculateProduct } from "../domain/product";
 import { evaluateWorkspace } from "../domain/quote";
-import { activeHourlyRate, createPricingSnapshot, runPricingEngine } from "../domain/pricingEngine";
+import { activeHourlyRate, createPricingSnapshot, economicProfileFor, runPricingEngine } from "../domain/pricingEngine";
 import { api } from "../services/api";
 import { useAutosave } from "../hooks/useAutosave";
 import { Sidebar, type AppSection } from "../components/Sidebar";
@@ -39,9 +40,20 @@ import { SaveQuoteModal } from "../features/quotes/SaveQuoteModal";
 import { QuotesHistoryView } from "../features/quotes/QuotesHistoryView";
 import { ClientDocumentModal } from "../features/quotes/ClientDocumentModal";
 import { PriceCalculationProgress, type PriceCalculationProgressState } from "../components/PriceCalculationProgress";
+import { normalizePrintDesignEffort, printDesignSummary } from "../domain/printDesign";
 
 function presetConfiguration(config: VideoConfiguration) {
   return JSON.stringify(Object.fromEntries(Object.entries(config).filter(([key]) => !["effortAmount", "effortUnit", "hoursPerDay", "estimatedHours", "externalCosts", "urgencyFeeMinor"].includes(key))));
+}
+
+function clientServiceDescription(service: QuoteService, pricing: PricingConfiguration) {
+  if (service.serviceType !== "print-design") return undefined;
+  try {
+    const config = parseProfessionalEnvelope(service.configurationJson, service.serviceType).data;
+    const definition = pricing.definitions.find((item) => item.serviceType === service.serviceType);
+    const parameters = pricing.parameters.filter((item) => item.serviceDefinitionId === definition?.id);
+    return printDesignSummary(config.parameterValues, parameters, pricing.options).join(" · ") || undefined;
+  } catch { return undefined; }
 }
 
 export function App() {
@@ -60,11 +72,12 @@ export function App() {
   const [marketJob, setMarketJob] = useState<MarketResearchJob | null>(null);
   const [settingsInitialTab, setSettingsInitialTab] = useState<SettingsTab>("general");
   const [settingsInitialCurrency, setSettingsInitialCurrency] = useState<Currency | undefined>();
+  const [settingsInitialEngineKey, setSettingsInitialEngineKey] = useState<string | undefined>();
   const [documentQuoteId, setDocumentQuoteId] = useState<string | null>(null);
   const [documentAfterSave, setDocumentAfterSave] = useState(false);
   const [calculationBusy, setCalculationBusy] = useState(false);
   const [priceProgress, setPriceProgress] = useState<PriceCalculationProgressState | null>(null);
-  const closeAllowed = useRef(false);
+  const closing = useRef(false);
   const marketJobRef = useRef<string | null>(null);
 
   const onSaved = useCallback((saved: QuoteService) => {
@@ -76,12 +89,13 @@ export function App() {
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     void getCurrentWindow().onCloseRequested(async (event) => {
-      if (closeAllowed.current) return;
       event.preventDefault();
+      if (closing.current) return;
+      closing.current = true;
       if (await flushAutosave()) {
-        closeAllowed.current = true;
-        await getCurrentWindow().close();
+        await api.exitApplication();
       } else {
+        closing.current = false;
         setNotice("No se pudo guardar todo. Reintentá antes de cerrar para no perder cambios.");
       }
     }).then((stop) => { unlisten = stop; });
@@ -128,6 +142,9 @@ export function App() {
   }, [activeServiceId]);
 
   const projectResult = useMemo(() => workspace && data ? evaluateWorkspace(workspace, data.settings, data.pricing) : null, [workspace, data]);
+  const documentServices = useMemo(() => workspace && data
+    ? workspace.services.map((service) => ({ id: service.id, title: service.title, description: clientServiceDescription(service, data.pricing) }))
+    : [], [data, workspace]);
 
   async function createProject(input: CreateProjectInput) {
     const created = await api.createProject(input);
@@ -185,11 +202,14 @@ export function App() {
 
   function programmingChange(service: QuoteService, config: ProgrammingConfiguration) {
     if (!workspace || !data) return;
-    const engineInput = { serviceType: service.serviceType, currency: workspace.quote.currency, parameterValues: config.parameterValues, externalCosts: config.externalCosts, finalOverrideMinor: service.finalSubtotalMinor, hasOverride: service.hasOverride, settings: data.settings, pricing: data.pricing };
+    const effectiveConfig = service.serviceType === "print-design"
+      ? { ...config, parameterValues: normalizePrintDesignEffort(config.parameterValues) }
+      : config;
+    const engineInput = { serviceType: service.serviceType, currency: workspace.quote.currency, parameterValues: effectiveConfig.parameterValues, externalCosts: effectiveConfig.externalCosts, finalOverrideMinor: service.finalSubtotalMinor, hasOverride: service.hasOverride, settings: data.settings, pricing: data.pricing };
     const result = runPricingEngine(engineInput);
     const snapshot = createPricingSnapshot(engineInput, result);
     const definition = data.pricing.definitions.find((item) => item.serviceType === service.serviceType);
-    const envelope: ServiceConfigurationEnvelope<ProgrammingConfiguration> = { schemaVersion: 2, serviceType: service.serviceType, data: config };
+    const envelope: ServiceConfigurationEnvelope<ProgrammingConfiguration> = { schemaVersion: 2, serviceType: service.serviceType, data: effectiveConfig };
     queueService(service, { configurationVersion: 2, configurationJson: JSON.stringify(envelope), calculatedSubtotalMinor: result.calculatedSubtotalMinor, suggestedSubtotalMinor: result.suggestedSubtotalMinor, finalSubtotalMinor: result.finalSubtotalMinor, pricingSnapshotJson: snapshot ? JSON.stringify(snapshot) : null, serviceDefinitionVersion: definition?.version ?? null });
   }
 
@@ -197,7 +217,7 @@ export function App() {
     if (!workspace || !data) return;
     const engine = data.pricing.pricingEngines.find((item) => item.engineKey === service.serviceType);
     if (!engine) return;
-    const profile = data.pricing.economicProfiles.find((item) => item.currency === workspace.quote.currency) ?? null;
+    const profile = economicProfileFor(data.pricing, service.serviceType, workspace.quote.currency);
     const context = { currency: workspace.quote.currency, hourlyRateMinor: activeHourlyRate(profile), usdToArsMicros: data.settings.usdToArsMicros };
     let result = engine.calculatorKey === "hybrid-v1" ? calculateHybrid(config as HybridConfiguration, context) : calculateProduct(config, context);
     if (service.hasOverride && service.manualSubtotalMinor != null) result = { ...result, finalSubtotalMinor: service.manualSubtotalMinor, effectiveSubtotalMinor: service.manualSubtotalMinor, hasOverride: true, lines: [...result.lines, { label: "Precio final manual", kind: "override", amountMinor: service.manualSubtotalMinor - (result.suggestedSubtotalMinor ?? result.calculatedSubtotalMinor ?? 0) }] };
@@ -284,6 +304,7 @@ export function App() {
     if (!workspace) return;
     setSettingsInitialTab("economy");
     setSettingsInitialCurrency(workspace.quote.currency);
+    setSettingsInitialEngineKey(workspace.services.find((service) => service.id === activeServiceId)?.serviceType);
     setSection("settings");
     setNotice("");
   }
@@ -293,7 +314,7 @@ export function App() {
     const engine = data.pricing.pricingEngines.find((item) => item.engineKey === service.serviceType);
     if (engine && ["physical-product-v1", "hybrid-v1"].includes(engine.calculatorKey)) {
       const config = (JSON.parse(service.configurationJson) as ServiceConfigurationEnvelope<ProductConfiguration | HybridConfiguration>).data;
-      const profile = data.pricing.economicProfiles.find((item) => item.currency === currentWorkspace.quote.currency) ?? null;
+      const profile = economicProfileFor(data.pricing, service.serviceType, currentWorkspace.quote.currency);
       const context = { currency: currentWorkspace.quote.currency, hourlyRateMinor: activeHourlyRate(profile), usdToArsMicros: data.settings.usdToArsMicros };
       let result = engine.calculatorKey === "hybrid-v1" ? calculateHybrid(config as HybridConfiguration, context) : calculateProduct(config, context);
       if (service.hasOverride && service.manualSubtotalMinor != null) {
@@ -309,9 +330,15 @@ export function App() {
       };
     }
 
-    const config = service.serviceType === "video-editing"
+    let config = service.serviceType === "video-editing"
       ? parseVideoEnvelope(service.configurationJson).data
-      : parseProgrammingEnvelope(service.configurationJson).data;
+      : service.serviceType === "programming"
+        ? parseProgrammingEnvelope(service.configurationJson).data
+        : parseProfessionalEnvelope(service.configurationJson, service.serviceType).data;
+    if (service.serviceType === "print-design") {
+      const professional = config as ProgrammingConfiguration;
+      config = { ...professional, parameterValues: normalizePrintDesignEffort(professional.parameterValues) };
+    }
     const parameterValues = service.serviceType === "video-editing"
       ? config as unknown as Record<string, unknown>
       : (config as ProgrammingConfiguration).parameterValues;
@@ -327,7 +354,10 @@ export function App() {
     const definition = data.pricing.definitions.find((item) => item.serviceType === service.serviceType);
     return {
       id: service.id, title: service.title, configurationVersion: service.configurationVersion,
-      configurationJson: service.configurationJson, calculatedSubtotalMinor: result.calculatedSubtotalMinor,
+      configurationJson: service.serviceType === "print-design"
+        ? JSON.stringify({ schemaVersion: 2, serviceType: service.serviceType, data: config })
+        : service.configurationJson,
+      calculatedSubtotalMinor: result.calculatedSubtotalMinor,
       suggestedSubtotalMinor: result.suggestedSubtotalMinor, finalSubtotalMinor: result.finalSubtotalMinor,
       hasOverride: service.hasOverride, manualSubtotalMinor: service.manualSubtotalMinor, manualReason: service.manualReason,
       pricingSnapshotJson: snapshot ? JSON.stringify(snapshot) : null,
@@ -508,16 +538,16 @@ export function App() {
   if (section === "workspace") content = workspace && projectResult ? <WorkspaceView workspace={workspace} settings={data.settings} pricing={data.pricing} result={projectResult} presets={data.presets} statuses={autosave.statuses} errors={autosave.errors} activeServiceId={activeServiceId} onActiveService={setActiveServiceId} onAddService={addService} onVideoChange={videoChange} onProgrammingChange={programmingChange} onGenericEngineChange={genericEngineChange} onFinalPriceChange={finalPriceChange} onTitleChange={(service, title) => queueService(service, { title })} onDeleteService={deleteService} onMoveService={moveService} onRetry={autosave.retry} onSavePreset={savePreset} onUpdatePreset={updatePreset} onDeletePreset={deletePreset} onRestorePreset={restorePreset} market={marketOverviewServiceId === activeServiceId ? marketOverview : null} marketJob={marketJob?.quoteServiceId === activeServiceId ? marketJob : null} onUpdateMarket={updateMarket} onCancelMarket={cancelMarket} onSaveQuote={openSaveQuote} onCalculateEstimate={calculateEstimate} onConfigureEconomy={openEconomyForQuote} calculationBusy={calculationBusy} onGenerateDocument={generateClientDocument} documentBusy={documentAfterSave} marketUpdating={marketJob?.status === "RUNNING"} /> : <div className="view-page"><EmptyState eyebrow="Pricing OS" title="Creá tu primer proyecto" description="El proyecto organiza cliente, moneda, cotización y servicios en un único workspace." action={<Button variant="accent" onClick={() => setNewProjectOpen(true)}>Nuevo proyecto</Button>} /></div>;
   else if (section === "clients") content = <ClientsView clients={data.clients} projects={data.projects} onSave={saveClient} onArchive={archiveClient} onOpenProject={openProject} />;
   else if (section === "projects") content = <ProjectsView projects={data.projects} onNew={() => setNewProjectOpen(true)} onOpen={openProject} onArchive={archiveProject} />;
-  else if (section === "market") content = <MarketView pricing={data.pricing} activeServiceId={activeServiceId} job={marketJob} onResearch={updateMarket} onCancel={cancelMarket} onConfigureSources={() => { setSettingsInitialTab("sources"); setSettingsInitialCurrency(undefined); setSection("settings"); }} />;
-  else if (section === "settings" || section === "services") content = <SettingsView key={`${section}-${settingsInitialTab}-${settingsInitialCurrency ?? ""}`} settings={data.settings} pricing={data.pricing} initialTab={section === "services" ? "engines" : settingsInitialTab} initialEconomyCurrency={settingsInitialCurrency} onSave={saveSettings} onPricingChange={pricingChange} />;
+  else if (section === "market") content = <MarketView pricing={data.pricing} activeServiceId={activeServiceId} job={marketJob} onResearch={updateMarket} onCancel={cancelMarket} onConfigureSources={() => { setSettingsInitialTab("sources"); setSettingsInitialCurrency(undefined); setSettingsInitialEngineKey(undefined); setSection("settings"); }} />;
+  else if (section === "settings" || section === "services") content = <SettingsView key={`${section}-${settingsInitialTab}-${settingsInitialCurrency ?? ""}-${settingsInitialEngineKey ?? ""}`} settings={data.settings} pricing={data.pricing} initialTab={section === "services" ? "engines" : settingsInitialTab} initialEconomyCurrency={settingsInitialCurrency} initialEconomyEngineKey={settingsInitialEngineKey} onSave={saveSettings} onPricingChange={pricingChange} />;
   else content = <QuotesHistoryView clients={data.clients} pricing={data.pricing} onOpenProject={openProject} onDuplicated={useDuplicatedQuote} />;
 
   return <div className="app-shell">
-    <Sidebar section={section} onSection={(next) => { if (next === "settings") { setSettingsInitialTab("general"); setSettingsInitialCurrency(undefined); } setSection(next); }} onNewProject={() => setNewProjectOpen(true)} />
-    <div className="app-body"><Topbar project={activeProject} projects={data.projects} theme={data.settings.theme} usdToArsMicros={data.settings.usdToArsMicros} onProject={openProject} onNewProject={() => setNewProjectOpen(true)} onCurrency={changeCurrency} onToggleTheme={toggleTheme} onSettings={() => { setSettingsInitialTab("general"); setSettingsInitialCurrency(undefined); setSection("settings"); }} />{notice && <div className="notice" role="status"><span>{notice}</span>{undoService && <button onClick={restoreDeletedService}>Deshacer</button>}<button onClick={() => { setNotice(""); setUndoService(null); }}>Cerrar</button></div>}{content}</div>
+    <Sidebar section={section} onSection={(next) => { if (next === "settings") { setSettingsInitialTab("general"); setSettingsInitialCurrency(undefined); setSettingsInitialEngineKey(undefined); } setSection(next); }} onNewProject={() => setNewProjectOpen(true)} />
+    <div className="app-body"><Topbar project={activeProject} projects={data.projects} theme={data.settings.theme} usdToArsMicros={data.settings.usdToArsMicros} onProject={openProject} onNewProject={() => setNewProjectOpen(true)} onCurrency={changeCurrency} onToggleTheme={toggleTheme} onSettings={() => { setSettingsInitialTab("general"); setSettingsInitialCurrency(undefined); setSettingsInitialEngineKey(undefined); setSection("settings"); }} />{notice && <div className="notice" role="status"><span>{notice}</span>{undoService && <button onClick={restoreDeletedService}>Deshacer</button>}<button onClick={() => { setNotice(""); setUndoService(null); }}>Cerrar</button></div>}{content}</div>
     {newProjectOpen && <NewProjectModal clients={data.clients} onClose={() => setNewProjectOpen(false)} onCreate={createProject} />}
     {priceProgress && <PriceCalculationProgress state={priceProgress} onCancel={() => void cancelMarket()} onDismiss={() => setPriceProgress(null)} />}
     {saveQuoteOpen && workspace && projectResult && <SaveQuoteModal workspace={workspace} result={projectResult} onClose={() => { setSaveQuoteOpen(false); setDocumentAfterSave(false); }} onSave={saveQuoteSnapshot} title={documentAfterSave ? "Guardar y preparar presupuesto" : undefined} submitLabel={documentAfterSave ? "Guardar y continuar" : undefined} />}
-    {documentQuoteId && workspace && <ClientDocumentModal quoteId={documentQuoteId} services={workspace.services.map((service) => ({ id: service.id, title: service.title }))} onClose={() => setDocumentQuoteId(null)} />}
+    {documentQuoteId && workspace && data && <ClientDocumentModal quoteId={documentQuoteId} services={documentServices} onClose={() => setDocumentQuoteId(null)} />}
   </div>;
 }

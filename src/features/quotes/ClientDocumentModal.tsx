@@ -5,7 +5,7 @@ import type { ClientDocumentConfig, ClientQuoteDocument } from "../../domain/typ
 import { api } from "../../services/api";
 import { Button, Field, Input, Modal } from "../../components/ui";
 
-type Service = { id: string; title: string };
+type Service = { id: string; title: string; description?: string };
 
 export function ClientDocumentModal({ quoteId, services, snapshotRevision, onClose }: { quoteId: string; services: Service[]; snapshotRevision?: number; onClose: () => void }) {
   const [config, setConfig] = useState<ClientDocumentConfig | null>(null);
@@ -16,9 +16,13 @@ export function ClientDocumentModal({ quoteId, services, snapshotRevision, onClo
 
   useEffect(() => {
     let active = true;
-    void api.getClientDocumentConfig(quoteId).then((next) => { if (active) setConfig({ ...next, snapshotRevision }); }).catch((reason) => { if (active) setError(String(reason)); });
+    void api.getClientDocumentConfig(quoteId).then((next) => {
+      if (!active) return;
+      const defaults = Object.fromEntries(services.filter((service) => service.description).map((service) => [service.id, service.description ?? ""]));
+      setConfig({ ...next, serviceDescriptions: { ...defaults, ...next.serviceDescriptions }, snapshotRevision });
+    }).catch((reason) => { if (active) setError(String(reason)); });
     return () => { active = false; };
-  }, [quoteId, snapshotRevision]);
+  }, [quoteId, services, snapshotRevision]);
 
   const publicServices = useMemo(() => [...services].sort((a, b) => a.title.localeCompare(b.title)), [services]);
   const update = (next: Partial<ClientDocumentConfig>) => setConfig((current) => current ? { ...current, ...next } : current);

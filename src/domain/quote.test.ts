@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { evaluateWorkspace } from "./quote";
 import { defaultVideoConfiguration } from "./video";
-import type { AppSettings, PricingConfiguration, QuoteService, Workspace } from "./types";
+import type { AppSettings, PricingConfiguration, PricingEngine, QuoteService, ServiceDefinition, Workspace } from "./types";
 
 const settings: AppSettings = { theme: "warm", hourlyRateArsMinor: null, hourlyRateUsdMinor: 5_000, usdToArsMicros: null, activeProjectId: null, suggestionsEnabled: true, suggestionStrategy: "balanced", baseCurrency: "USD", helpMode: "guided", localAiEnabled: false, ollamaBaseUrl: "http://127.0.0.1:11434", ollamaModel: null, aiAutoApplyHighConfidence: false, updatedAt: "2026-01-01" };
 const pricing: PricingConfiguration = { definitions: [], parameters: [], options: [], rules: [], economicProfiles: [], marketSources: [], engineCategories: [], pricingEngines: [], engineSources: [] };
@@ -23,5 +23,18 @@ describe("resultado del proyecto", () => {
 
   it("no presenta cero cuando todos los servicios siguen pendientes", () => {
     expect(evaluateWorkspace(workspace([service({ calculatedSubtotalMinor: null, finalSubtotalMinor: null })]), settings, pricing).totalMinor).toBeNull();
+  });
+
+  it("no reutiliza en Programación un cálculo manual viejo si esa profesión no tiene economía propia", () => {
+    const definition: ServiceDefinition = { id: "service-programming", serviceType: "programming", name: "Programación", description: null, version: 1, enabled: true, suggestionsEnabled: true, defaultStrategy: "balanced", competitiveMarginMicros: null, balancedMarginMicros: null, premiumMarginMicros: null, createdAt: "", updatedAt: "" };
+    const engine: PricingEngine = { id: "engine-programming", engineKey: "programming", name: "Programación", description: null, engineType: "service", categoryId: null, calculatorKey: "professional-service-v1", serviceDefinitionId: definition.id, unitKind: "hour", tagsJson: "[]", status: "active", classificationOrigin: "automatic", classificationConfidenceMicros: null, classificationExplanation: null, classificationVersion: 1, isSystem: true, createdAt: "", updatedAt: "", archivedAt: null };
+    const programming = service({ id: "programming", serviceType: "programming", title: "Programación", configurationJson: JSON.stringify({ schemaVersion: 2, serviceType: "programming", data: { parameterValues: { estimatedHours: 8 }, externalCosts: [], notes: "" } }), calculatedSubtotalMinor: 99_000, suggestedSubtotalMinor: 99_000, finalSubtotalMinor: 99_000 });
+    const separatedPricing: PricingConfiguration = { ...pricing, definitions: [definition], pricingEngines: [engine] };
+
+    const result = evaluateWorkspace(workspace([programming]), settings, separatedPricing);
+
+    expect(result.services[0].result.calculatedSubtotalMinor).toBeNull();
+    expect(result.services[0].result.issues).toContain("Configurá tu economía en USD.");
+    expect(result.totalMinor).toBeNull();
   });
 });

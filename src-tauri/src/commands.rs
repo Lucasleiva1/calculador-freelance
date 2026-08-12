@@ -23,6 +23,11 @@ fn now() -> String {
     Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 
+#[tauri::command]
+pub fn exit_application(app: tauri::AppHandle) {
+    app.exit(0);
+}
+
 fn clean_optional(value: Option<String>) -> Option<String> {
     value.and_then(|value| {
         let trimmed = value.trim().to_string();
@@ -138,10 +143,10 @@ async fn pricing_configuration(pool: &SqlitePool) -> AppResult<PricingConfigurat
     .fetch_all(pool)
     .await?;
     let economic_profiles = sqlx::query_as::<_, EconomicProfile>(
-        "SELECT currency, monthly_income_target_minor, monthly_expenses_minor,
+        "SELECT engine_id, currency, monthly_income_target_minor, monthly_expenses_minor,
                 billable_hours_micros, reserve_tax_micros, desired_margin_micros,
                 default_urgency_micros, work_days, vacation_weeks, manual_hourly_rate_minor,
-                updated_at FROM economic_profiles ORDER BY currency",
+                updated_at FROM engine_economic_profiles ORDER BY engine_id, currency",
     )
     .fetch_all(pool)
     .await?;
@@ -993,6 +998,15 @@ pub async fn save_economic_profile(
 ) -> Result<PricingConfiguration, String> {
     async {
         validate_currency(&input.currency)?;
+        let engine_exists: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM pricing_engines WHERE id=? AND status='active' AND archived_at IS NULL",
+        )
+        .bind(&input.engine_id)
+        .fetch_one(&state.pool)
+        .await?;
+        if engine_exists == 0 {
+            return Err(AppError::Validation("La profesión seleccionada no está activa.".into()));
+        }
         validate_non_negative(input.monthly_income_target_minor, "Objetivo mensual")?;
         validate_non_negative(input.monthly_expenses_minor, "Gastos mensuales")?;
         validate_non_negative(input.manual_hourly_rate_minor, "Tarifa manual")?;
@@ -1000,27 +1014,20 @@ pub async fn save_economic_profile(
         validate_margin(input.desired_margin_micros, "Margen deseado")?;
         if input.billable_hours_micros.is_some_and(|v| v <= 0) { return Err(AppError::Validation("Las horas facturables deben ser mayores que cero.".into())); }
         sqlx::query(
-            "INSERT INTO economic_profiles (currency, monthly_income_target_minor, monthly_expenses_minor,
+            "INSERT INTO engine_economic_profiles (engine_id, currency, monthly_income_target_minor, monthly_expenses_minor,
              billable_hours_micros, reserve_tax_micros, desired_margin_micros, default_urgency_micros,
              work_days, vacation_weeks, manual_hourly_rate_minor, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-             ON CONFLICT(currency) DO UPDATE SET monthly_income_target_minor=excluded.monthly_income_target_minor,
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(engine_id, currency) DO UPDATE SET monthly_income_target_minor=excluded.monthly_income_target_minor,
              monthly_expenses_minor=excluded.monthly_expenses_minor, billable_hours_micros=excluded.billable_hours_micros,
              reserve_tax_micros=excluded.reserve_tax_micros, desired_margin_micros=excluded.desired_margin_micros,
              default_urgency_micros=excluded.default_urgency_micros, work_days=excluded.work_days,
              vacation_weeks=excluded.vacation_weeks, manual_hourly_rate_minor=excluded.manual_hourly_rate_minor,
              updated_at=excluded.updated_at",
-        ).bind(&input.currency).bind(input.monthly_income_target_minor).bind(input.monthly_expenses_minor)
+        ).bind(&input.engine_id).bind(&input.currency).bind(input.monthly_income_target_minor).bind(input.monthly_expenses_minor)
          .bind(input.billable_hours_micros).bind(input.reserve_tax_micros).bind(input.desired_margin_micros)
          .bind(input.default_urgency_micros).bind(input.work_days).bind(input.vacation_weeks)
          .bind(input.manual_hourly_rate_minor).bind(now()).execute(&state.pool).await?;
-        if input.currency == "ARS" {
-            sqlx::query("UPDATE app_settings SET hourly_rate_ars_minor=?, updated_at=? WHERE id=1")
-                .bind(input.manual_hourly_rate_minor).bind(now()).execute(&state.pool).await?;
-        } else {
-            sqlx::query("UPDATE app_settings SET hourly_rate_usd_minor=?, updated_at=? WHERE id=1")
-                .bind(input.manual_hourly_rate_minor).bind(now()).execute(&state.pool).await?;
-        }
         pricing_configuration(&state.pool).await
     }.await.map_err(command_error)
 }
