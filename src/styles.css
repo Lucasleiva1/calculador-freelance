@@ -26,28 +26,34 @@
 .print-design-context__facts { display: grid; grid-template-columns: repeat(2, minmax(150px, 1fr)); gap: 8px; min-width: min(100%, 360px); }
 .print-design-context__facts span { border: 1px solid var(--border); background: var(--surface-secondary); padding: 12px; display: grid; gap: 4px; }
 .print-design-context__facts b { color: var(--text-muted); font-size: 10px; letter-spacing: .12em; text-transform: uppercase; }
-.complexity-guide { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
-.complexity-guide article { border: 1px solid var(--border); background: var(--surface); padding: 12px; display: grid; gap: 5px; }
-.complexity-guide strong { color: var(--accent); text-transform: uppercase; font-size: 11px; letter-spacing: .08em; }
-.complexity-guide span { color: var(--text-muted); font-size: 12px; line-height: 1.4; }
-.print-design-groups { display: grid; gap: 8px; }
-.print-design-group { border: 1px solid var(--border); background: var(--surface); }
-.print-design-group > summary { cursor: pointer; list-style: none; display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 15px 17px; user-select: none; }
-.print-design-group > summary::-webkit-details-marker { display: none; }
-.print-design-group > summary span { display: grid; gap: 3px; }
-.print-design-group > summary strong { font-size: 14px; letter-spacing: .03em; }
-.print-design-group > summary small { color: var(--text-muted); font-size: 12px; font-weight: 400; }
-.print-design-group > summary svg { flex: 0 0 auto; transition: transform .18s ease; }
-.print-design-group[open] > summary { border-bottom: 1px solid var(--border); }
-.print-design-group[open] > summary svg { transform: rotate(180deg); }
-.print-design-group__body { padding: 17px; }
-.print-design-group .dynamic-fields { align-items: start; }
-.print-design-time { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border); }
+.print-design-steps { display: grid; gap: 12px; }
+.print-step { border: 1px solid var(--border); background: var(--surface); padding: 18px; display: grid; gap: 18px; }
+.print-step > header { display: flex; gap: 12px; align-items: flex-start; padding-bottom: 14px; border-bottom: 1px solid var(--border); }
+.print-step > header > span { width: 30px; height: 30px; flex: 0 0 30px; display: grid; place-items: center; background: var(--accent); color: #fff; font-weight: 800; }
+.print-step > header h3 { margin: 0 0 3px; font-size: 18px; }
+.print-step > header p, .print-step__notice { margin: 0; color: var(--text-muted); font-size: 13px; line-height: 1.45; }
+.print-step__notice { padding: 11px 13px; border-left: 3px solid var(--accent); background: var(--surface-secondary); }
+.print-segments { display: grid; grid-template-columns: repeat(auto-fit, minmax(132px, 1fr)); gap: 8px; }
+.print-segments button { min-height: 48px; padding: 10px 12px; border: 1px solid var(--border-strong); background: var(--surface-secondary); text-align: left; display: grid; gap: 3px; }
+.print-segments button:hover { border-color: var(--accent); }
+.print-segments button.is-selected { color: var(--accent); border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); background: color-mix(in srgb, var(--accent) 8%, var(--surface)); }
+.print-segments small { color: var(--text-muted); font-size: 11px; font-weight: 400; }
+.print-checklist { margin: 0; padding: 0; border: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.print-checklist legend { grid-column: 1 / -1; padding: 0 0 7px; color: var(--text-secondary); font-size: 11px; font-weight: 680; letter-spacing: .14em; text-transform: uppercase; }
+.print-checklist label { min-height: 46px; padding: 10px 12px; border: 1px solid var(--border); background: var(--surface-secondary); display: flex; gap: 10px; align-items: center; cursor: pointer; }
+.print-checklist label.is-selected { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, var(--surface)); }
+.print-checklist input { width: 19px; height: 19px; flex: 0 0 auto; accent-color: var(--accent); }
+.complexity-control { display: flex; justify-content: space-between; gap: 16px; align-items: center; padding: 14px; border: 1px solid var(--border); background: var(--surface-secondary); }
+.complexity-control > div { display: grid; grid-template-columns: auto auto; gap: 3px 12px; align-items: baseline; }
+.complexity-control .eyebrow { grid-column: 1 / -1; }
+.complexity-control strong { color: var(--accent); font-size: 18px; }
+.complexity-control small { color: var(--text-muted); }
 .print-design-time__heading { display: flex; gap: 10px; align-items: flex-start; margin-bottom: 14px; }
 .print-design-time__heading div { display: grid; gap: 3px; }
 .print-design-time__heading span { color: var(--text-muted); font-size: 12px; }
-.print-design-time__mode { margin-top: 12px; display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--text-muted); font-size: 12px; }
-.print-design-time__mode .button { flex: 0 0 auto; }
+.effort-ranges { display: flex; flex-wrap: wrap; gap: 7px; }
+.effort-ranges button { border: 1px solid var(--border); background: var(--surface-secondary); padding: 7px 12px; }
+.effort-ranges button:hover { border-color: var(--accent); color: var(--accent); }
 .print-design-summary { border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--border)); background: color-mix(in srgb, var(--accent) 7%, var(--surface)); padding: 18px; display: grid; gap: 14px; }
 .print-design-summary header { display: flex; gap: 10px; align-items: center; }
 .print-design-summary h3 { margin: 2px 0 0; }
@@ -57,15 +63,14 @@
 .print-design-summary__empty { color: var(--text-muted); display: flex; gap: 9px; align-items: center; }
 
 @media (max-width: 1100px) {
-  .complexity-guide { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .print-design-context { flex-direction: column; }
   .print-design-context__facts { width: 100%; }
 }
 
 @media (max-width: 680px) {
-  .complexity-guide, .print-design-context__facts { grid-template-columns: 1fr; }
-  .print-design-group > summary { padding: 13px; }
-  .print-design-group__body { padding: 13px; }
+  .print-design-context__facts, .print-checklist { grid-template-columns: 1fr; }
+  .print-step { padding: 13px; }
+  .complexity-control { align-items: flex-start; flex-direction: column; }
 }
 
 :root[data-theme="dark"] {

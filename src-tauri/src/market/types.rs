@@ -11,6 +11,8 @@ pub struct MarketQueryContext {
     pub quantity: Option<f64>,
     pub estimated_hours: Option<f64>,
     pub features: Vec<String>,
+    pub client_tier: Option<String>,
+    pub work_class: Option<String>,
 }
 
 impl MarketQueryContext {
@@ -24,6 +26,8 @@ impl MarketQueryContext {
             quantity: None,
             estimated_hours: None,
             features: Vec::new(),
+            client_tier: None,
+            work_class: None,
         }
     }
 }

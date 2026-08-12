@@ -2,6 +2,7 @@ node_modules/
 dist/
 coverage/
 src-tauri/target/
+src-tauri/target-fixed/
 *.log
 *.sqlite
 *.sqlite3

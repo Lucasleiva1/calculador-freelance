@@ -26,6 +26,7 @@ import { PrintDesignEditor } from "../print-design/PrintDesignEditor";
 import { ProductEditor } from "../product/ProductEditor";
 import { ResultInspector } from "../../components/ResultInspector";
 import { Button, EmptyState, StatusDot } from "../../components/ui";
+import type { PrintDesignPriceSelection } from "../../domain/printDesign";
 
 function saveLabel(status: SaveStatus | undefined) {
   if (status === "saving") return "Guardando";
@@ -82,7 +83,7 @@ export function WorkspaceView({
   onVideoChange: (service: QuoteService, config: VideoConfiguration, manualMinor?: number | null, manualReason?: string | null, immediate?: boolean) => void;
   onProgrammingChange: (service: QuoteService, config: ProgrammingConfiguration) => void;
   onGenericEngineChange: (service: QuoteService, config: ProductConfiguration | HybridConfiguration, immediate?: boolean) => void;
-  onFinalPriceChange: (service: QuoteService, finalMinor: number | null, reason: string | null) => void;
+  onFinalPriceChange: (service: QuoteService, finalMinor: number | null, reason: string | null, selection?: PrintDesignPriceSelection | null) => void;
   onTitleChange: (service: QuoteService, title: string) => void;
   onDeleteService: (service: QuoteService) => Promise<void>;
   onMoveService: (service: QuoteService, direction: -1 | 1) => Promise<void>;
@@ -134,7 +135,9 @@ export function WorkspaceView({
   }, [active, activeEngine]);
   const activeEngines = pricing.pricingEngines.filter((engine) => engine.status === "active" && engine.calculatorKey !== "unconfigured");
   const activeIssues = activeResult?.issues ?? [];
-  const activeIsReady = activeResult?.status === "ready" && activeResult.finalSubtotalMinor != null;
+  const activeCalculationReady = activeResult?.status === "ready" && activeResult.calculatedSubtotalMinor != null;
+  const activeIsReady = activeCalculationReady && activeResult?.finalSubtotalMinor != null;
+  const waitingForPrintPrice = active?.serviceType === "print-design" && activeCalculationReady && !activeIsReady;
   const projectReadyForDocument = workspace.services.length > 0 && result.totalMinor != null && result.unpricedCount === 0;
   const requiresEconomy = activeIssues.some((issue) => /Configurá tu (tarifa|economía)/u.test(issue));
   const isMarketUpdating = marketUpdating ?? marketJob?.status === "RUNNING";
@@ -178,8 +181,8 @@ export function WorkspaceView({
         {!active ? <EmptyState eyebrow="Cotización vacía" title="Agregá el primer módulo" description="Los servicios, productos e híbridos viven como motores independientes dentro del mismo proyecto." action={<Button variant="accent" onClick={() => onAddService("video-editing")}><Plus size={17} /> Agregar Edición de video</Button>} /> : <section className="service-panel">
           <header className="service-panel__header"><div className="service-title"><span>{String(workspace.services.indexOf(active) + 1).padStart(2, "0")} /</span><input aria-label="Título del módulo" value={active.title} disabled={isMarketUpdating} onChange={(event) => onTitleChange(active, event.target.value)} /></div><div className="service-panel__tools"><span>{formatMoney(activeResult?.effectiveSubtotalMinor, workspace.quote.currency)}</span><button title="Mover arriba" disabled={isMarketUpdating || workspace.services.indexOf(active) === 0} onClick={() => onMoveService(active, -1)}><ArrowUp size={16} /></button><button title="Mover abajo" disabled={isMarketUpdating || workspace.services.indexOf(active) === workspace.services.length - 1} onClick={() => onMoveService(active, 1)}><ArrowDown size={16} /></button><button title="Quitar módulo" disabled={isMarketUpdating} onClick={() => onDeleteService(active)}><Trash2 size={16} /></button></div></header>
           {activeStatus === "error" && <div className="save-error" role="alert">{errors[active.id]}</div>}
-          <section className={`estimate-callout ${activeIsReady ? "estimate-callout--ready" : "estimate-callout--incomplete"}`} aria-live="polite">
-            <div className="estimate-callout__status">{activeIsReady ? <CircleCheck size={20} aria-hidden="true" /> : <CircleAlert size={20} aria-hidden="true" />}<div><span className="eyebrow">{activeIsReady ? "Estimado actualizado" : "Estimado pendiente"}</span><strong>{activeIsReady ? formatMoney(activeResult?.finalSubtotalMinor ?? null, workspace.quote.currency) : "Completá los requisitos para ver el precio"}</strong><p>{activeIsReady ? "El cálculo se actualiza cuando cambiás los parámetros de este módulo." : "No se inventa ningún importe: revisá lo que falta y volvé a calcular."}</p></div></div>
+          <section className={`estimate-callout ${activeCalculationReady ? "estimate-callout--ready" : "estimate-callout--incomplete"}`} aria-live="polite">
+            <div className="estimate-callout__status">{activeCalculationReady ? <CircleCheck size={20} aria-hidden="true" /> : <CircleAlert size={20} aria-hidden="true" />}<div><span className="eyebrow">{waitingForPrintPrice ? "Tres precios por elegir" : activeIsReady ? "Estimado actualizado" : "Estimado pendiente"}</span><strong>{waitingForPrintPrice ? "Elegí qué precio usar" : activeIsReady ? formatMoney(activeResult?.finalSubtotalMinor ?? null, workspace.quote.currency) : "Completá los requisitos para ver el precio"}</strong><p>{waitingForPrintPrice ? "El sostenible ya está calculado. Calculá las referencias de mercado y elegí una; ninguna se aplica automáticamente." : activeIsReady ? "El cálculo se actualiza cuando cambiás los parámetros de este módulo." : "No se inventa ningún importe: revisá lo que falta y volvé a calcular."}</p></div></div>
             <div className="estimate-callout__actions"><Button type="button" variant={activeIsReady ? "default" : "accent"} onClick={() => void calculateAndReveal()} disabled={calculating || isMarketUpdating}><Calculator size={16} /> {calculating ? "Calculando…" : "Calcular los 3 precios"}</Button>{requiresEconomy && onConfigureEconomy && <Button type="button" variant="ghost" onClick={onConfigureEconomy}><Settings2 size={16} /> Configurar precio local</Button>}</div>
             {!activeIsReady && activeIssues.length > 0 && <ul className="estimate-callout__requirements">{activeIssues.slice(0, 3).map((issue) => <li key={issue}>{issue}</li>)}</ul>}
           </section>
@@ -193,7 +196,7 @@ export function WorkspaceView({
         </section>}
       </div>
     </main>
-    <ResultInspector key={activeServiceId ?? "empty"} result={result} currency={workspace.quote.currency} activeServiceId={activeServiceId} suggestionsEnabled={settings.suggestionsEnabled} usdToArsMicros={settings.usdToArsMicros} market={market} marketJob={marketJob} onUpdateMarket={onUpdateMarket} onCancelMarket={onCancelMarket} onConfigureEconomy={onConfigureEconomy} onFinalPriceChange={active ? (final, reason) => onFinalPriceChange(active, final, reason) : undefined} />
+    <ResultInspector key={activeServiceId ?? "empty"} result={result} currency={workspace.quote.currency} activeServiceId={activeServiceId} suggestionsEnabled={settings.suggestionsEnabled} usdToArsMicros={settings.usdToArsMicros} market={market} marketJob={marketJob} onUpdateMarket={onUpdateMarket} onCancelMarket={onCancelMarket} onConfigureEconomy={onConfigureEconomy} onFinalPriceChange={active ? (final, reason, selection) => onFinalPriceChange(active, final, reason, selection) : undefined} />
     <footer className="actionbar">
       <div className="actionbar__summary"><FileOutput size={20} /><span>Resumen del proyecto</span><i /><strong>{workspace.services.length} {workspace.services.length === 1 ? "módulo" : "módulos"}</strong><StatusDot /></div>
       <div className="actionbar__actions">

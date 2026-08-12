@@ -19,6 +19,7 @@ import { parseThreePriceSnapshot, type AutomaticPriceOption } from "../domain/ma
 import { convertMinor, formatMoney, formatRate, majorToMinor, minorToInput } from "../domain/money";
 import { api } from "../services/api";
 import { Button, Field, Input, Modal } from "./ui";
+import type { PrintDesignPriceKind, PrintDesignPriceSelection } from "../domain/printDesign";
 
 interface ResultInspectorProps {
   result: ProjectResult;
@@ -31,7 +32,7 @@ interface ResultInspectorProps {
   onUpdateMarket: (force?: boolean) => Promise<void>;
   onCancelMarket: () => Promise<void>;
   onConfigureEconomy?: () => void;
-  onFinalPriceChange?: (finalMinor: number | null, reason: string | null) => void;
+  onFinalPriceChange?: (finalMinor: number | null, reason: string | null, selection?: PrintDesignPriceSelection | null) => void;
 }
 
 export function ResultInspector({
@@ -47,6 +48,7 @@ export function ResultInspector({
   onFinalPriceChange,
 }: ResultInspectorProps) {
   const active = result.services.find(({ service }) => service.id === activeServiceId);
+  const isPrintDesign = active?.service.serviceType === "print-design";
   const marketUpdating = marketJob?.status === "RUNNING";
   const snapshot = market?.latestSnapshot ?? null;
   const automatic = parseThreePriceSnapshot(snapshot);
@@ -65,7 +67,7 @@ export function ResultInspector({
   const [reason, setReason] = useState(active?.service.manualReason ?? "");
   const [sourcesOpen, setSourcesOpen] = useState(false);
 
-  function choosePrice(value: number | null, sourceCurrency: Currency, label: string) {
+  function choosePrice(value: number | null, sourceCurrency: Currency, label: string, kind: PrintDesignPriceKind) {
     if (value == null || !onFinalPriceChange) return;
     const finalValue = convertMinor(value, sourceCurrency, currency, fxRate);
     if (finalValue == null) return;
@@ -73,7 +75,13 @@ export function ResultInspector({
     setOverrideOpen(true);
     setFinalInput(minorToInput(finalValue));
     setReason(nextReason);
-    onFinalPriceChange(finalValue, nextReason);
+    onFinalPriceChange(finalValue, nextReason, isPrintDesign ? {
+      kind,
+      amountMinor: finalValue,
+      currency,
+      selectedAt: new Date().toISOString(),
+      marketSnapshotId: kind === "sustainable" ? null : snapshot?.id ?? null,
+    } : undefined);
   }
 
   return <aside id="resultado-estimado" className="inspector" tabIndex={-1} aria-label="Resultado del estimado">
@@ -94,12 +102,12 @@ export function ResultInspector({
           <PriceCard
             icon={<ShieldCheck size={19} />}
             tone="local"
-            title="Local / sostenible"
-            eyebrow="Tus parámetros manuales"
+            title="Sostenible"
+            eyebrow="Tu economía personal"
             value={localPrice}
             currency={currency}
-            description={localPrice == null ? localPendingDescription : "Tu base local calculada sólo con los datos que cargaste."}
-            onChoose={localPrice != null && onFinalPriceChange ? () => choosePrice(localPrice, currency, "Precio local / sostenible") : undefined}
+            description={localPrice == null ? localPendingDescription : "Calculado sólo con tu economía y el alcance de este trabajo."}
+            onChoose={localPrice != null && onFinalPriceChange ? () => choosePrice(localPrice, currency, "Precio sostenible", "sustainable") : undefined}
             action={localPrice == null && needsEconomy && onConfigureEconomy ? <Button type="button" variant="ghost" onClick={onConfigureEconomy}><Settings2 size={14} /> Completar datos</Button> : undefined}
           />
           <PriceCard
@@ -111,7 +119,7 @@ export function ResultInspector({
             currency={currency}
             description={automatic.market ? optionDescription(automatic.market) : "Todavía no hay datos argentinos separados. Actualizá las fuentes."}
             range={optionRange(automatic.market, snapshotCurrency, currency, fxRate)}
-            onChoose={marketPrice != null && onFinalPriceChange ? () => choosePrice(marketPrice, currency, "Precio de mercado Argentina") : undefined}
+            onChoose={marketPrice != null && onFinalPriceChange ? () => choosePrice(marketPrice, currency, "Precio de mercado Argentina", "market") : undefined}
           />
           <PriceCard
             icon={<Globe2 size={19} />}
@@ -122,7 +130,7 @@ export function ResultInspector({
             currency={internationalCurrency}
             description={automatic.international ? optionDescription(automatic.international) : "Todavía no hay una referencia internacional separada."}
             range={optionRange(automatic.international, snapshotCurrency, internationalCurrency, fxRate)}
-            onChoose={internationalPrice != null && onFinalPriceChange ? () => choosePrice(internationalPrice, internationalCurrency, "Precio internacional") : undefined}
+            onChoose={internationalPrice != null && onFinalPriceChange ? () => choosePrice(internationalPrice, internationalCurrency, "Precio internacional", "international") : undefined}
             action={<Button type="button" variant="ghost" disabled={!fxRate} onClick={() => setInternationalCurrency((current) => current === "ARS" ? "USD" : "ARS")}><ArrowLeftRight size={14} /> Ver en {internationalCurrency === "ARS" ? "USD" : "ARS"}</Button>}
           />
         </div>
@@ -133,8 +141,8 @@ export function ResultInspector({
           <CircleAlert size={17} /><div><strong>El precio local está pendiente</strong><ul>{active.result.issues.map((issue) => <li key={issue}>{issue}</li>)}</ul></div>
         </section>}
 
-        <label className="override-toggle"><input type="checkbox" checked={overrideOpen} disabled={marketUpdating} onChange={(event) => { setOverrideOpen(event.target.checked); if (!event.target.checked) onFinalPriceChange?.(null, null); }} /> Ajustar el precio final</label>
-        {overrideOpen && <div className="override-box"><Field label={`Precio final · ${currency}`}><Input type="number" min="0" step="0.01" value={finalInput} disabled={marketUpdating} onChange={(event) => setFinalInput(event.target.value)} /></Field><Field label="Motivo · opcional"><Input disabled={marketUpdating} value={reason} onChange={(event) => setReason(event.target.value)} /></Field><Button variant="accent" disabled={marketUpdating} onClick={() => onFinalPriceChange?.(majorToMinor(finalInput), reason || null)}>Aplicar precio final</Button></div>}
+        {!isPrintDesign && <><label className="override-toggle"><input type="checkbox" checked={overrideOpen} disabled={marketUpdating} onChange={(event) => { setOverrideOpen(event.target.checked); if (!event.target.checked) onFinalPriceChange?.(null, null); }} /> Ajustar el precio final</label>
+        {overrideOpen && <div className="override-box"><Field label={`Precio final · ${currency}`}><Input type="number" min="0" step="0.01" value={finalInput} disabled={marketUpdating} onChange={(event) => setFinalInput(event.target.value)} /></Field><Field label="Motivo · opcional"><Input disabled={marketUpdating} value={reason} onChange={(event) => setReason(event.target.value)} /></Field><Button variant="accent" disabled={marketUpdating} onClick={() => onFinalPriceChange?.(majorToMinor(finalInput), reason || null)}>Aplicar precio final</Button></div>}</>}
 
         <button type="button" className={`breakdown-toggle ${breakdownOpen ? "is-open" : ""}`} aria-expanded={breakdownOpen} onClick={() => setBreakdownOpen(!breakdownOpen)}>Ver desglose local <ChevronDown size={16} aria-hidden="true" /></button>
         {breakdownOpen && <div className="breakdown">{active.result.lines.length === 0 ? <p>El precio local todavía no tiene líneas calculables.</p> : active.result.lines.map((line, index) => <div key={`${line.id ?? line.label}-${index}`}><span>{line.label}<small>{line.detail}</small></span><strong>{line.amountMinor >= 0 ? "+" : "−"}{formatMoney(Math.abs(line.amountMinor), currency)}</strong></div>)}</div>}

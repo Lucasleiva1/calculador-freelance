@@ -113,6 +113,10 @@ mod tests {
                 .fetch_one(&pool)
                 .await
                 .expect("print design parameters");
+            let active_print_parameters: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM service_parameters WHERE service_definition_id='service-print-design' AND enabled=1")
+                .fetch_one(&pool)
+                .await
+                .expect("active print design parameters");
             let forbidden_options: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM parameter_options WHERE parameter_id IN (SELECT id FROM service_parameters WHERE service_definition_id='service-print-design') AND (lower(label) LIKE '%serigraf%' OR lower(value) LIKE '%serigraf%')")
                 .fetch_one(&pool)
                 .await
@@ -121,14 +125,15 @@ mod tests {
                 .fetch_one(&pool)
                 .await
                 .expect("print suggestion sources");
-            assert_eq!(print_parameters, 50);
+            assert_eq!(print_parameters, 66);
+            assert_eq!(active_print_parameters, 18);
             assert_eq!(forbidden_options, 0);
-            assert_eq!(print_suggestion_sources, 3);
+            assert_eq!(print_suggestion_sources, 4);
             let print_seed_observations: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM market_observations WHERE source_id='source-ardg-print-design' AND service_type='print-design' AND comparison_eligibility='ELIGIBLE'")
                 .fetch_one(&pool)
                 .await
                 .expect("print seed observations");
-            assert_eq!(print_seed_observations, 6);
+            assert_eq!(print_seed_observations, 9);
             let categories: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM engine_categories")
                 .fetch_one(&pool)
                 .await
@@ -154,7 +159,7 @@ mod tests {
             // BCRA aporta cambio; ProLatamWork aporta Argentina; ReelRate,
             // SoloPricing, Index.dev y goLance aportan internacional; Remote OK
             // conserva el contexto salarial separado.
-            assert_eq!(automatic_sources, 11);
+            assert_eq!(automatic_sources, 12);
             let automatic_keys: Vec<String> = sqlx::query_scalar(
                 "SELECT system_key FROM market_sources WHERE acquisition_mode='auto_http' AND automation_status='APPROVED' ORDER BY system_key",
             )
@@ -174,7 +179,8 @@ mod tests {
                     "reelrate",
                     "remoteok",
                     "solopricing",
-                    "twine-print-design"
+                    "twine-print-design",
+                    "upwork-print-design"
                 ]
             );
             let (upwork_url, upwork_status, upwork_automation): (String, String, String) =

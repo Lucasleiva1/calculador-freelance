@@ -33,14 +33,16 @@ describe("market intelligence domain", () => {
       id: "print-design",
       serviceType: "print-design",
       title: "Estampa",
-      configurationJson: JSON.stringify({ data: { parameterValues: { mainWorkType: "vector-corrected", complexity: "high", printOutput: ["dtf"], vectorizationLevel: "manual-correction", editableDelivery: "ai", estimatedHours: 3.5, projectType: "no-debe-usarse" } } }),
+      configurationJson: JSON.stringify({ data: { parameterValues: { hasReference: true, materialType: "ready", clientTier: "medium", productType: "shirt", complexity: "complex", printSystem: "dtf", workTasks: ["adapt-composition"], deliveryExtras: ["ai-vector"], estimatedHours: 3.5, projectType: "no-debe-usarse" } } }),
     };
     const context = buildMarketQueryContext(printDesign, "both");
     expect(context.service).toBe("print-design");
-    expect(context.subtype).toBe("vector-corrected");
-    expect(context.level).toBe("high");
+    expect(context.subtype).toBe("shirt");
+    expect(context.level).toBe("complex");
     expect(context.estimatedHours).toBe(3.5);
-    expect(context.features).toEqual(expect.arrayContaining(["printOutput", "vectorizationLevel", "editableDelivery"]));
+    expect(context.clientTier).toBe("B");
+    expect(context.workClass).toBe("adaptation");
+    expect(context.features).toEqual(expect.arrayContaining(["printSystem", "workTasks", "deliveryExtras"]));
     expect(context.features).not.toContain("projectType");
   });
 

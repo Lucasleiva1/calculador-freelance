@@ -5,6 +5,11 @@ import type {
   ServiceResult, ServiceType,
 } from "./types";
 import type { ExternalCost } from "./video";
+import {
+  canonicalizePrintDesignValues,
+  printDesignExtraHours,
+  printDesignPreparationRate,
+} from "./printDesign";
 
 const MICRO = 1_000_000;
 
@@ -99,6 +104,84 @@ function marginForStrategy(definition: ServiceDefinition, strategy: AppSettings[
   return definition.balancedMarginMicros;
 }
 
+function runPrintDesignPricing(input: EngineInput, profile: EconomicProfile | null): ServiceResult {
+  const values = canonicalizePrintDesignValues(input.parameterValues);
+  const hourlyRateMinor = activeHourlyRate(profile);
+  const coreHours = numeric(values.estimatedHours) ?? 0;
+  const extraHours = printDesignExtraHours(values);
+  const preparationRate = printDesignPreparationRate(values);
+  const issues: string[] = [];
+  const lines: PriceLine[] = [];
+
+  if (typeof values.hasReference !== "boolean") issues.push("Indicá si existe una referencia.");
+  if (!values.clientTier) issues.push("Elegí la categoría del cliente.");
+  if (values.hasReference === true && !values.materialType) issues.push("Indicá qué material recibiste.");
+  if (!values.productType) issues.push("Elegí el producto.");
+  if (values.productType === "other" && !values.otherProduct) issues.push("Especificá el otro producto.");
+  if (!values.garmentTone) issues.push("Elegí el tono de la prenda o soporte.");
+  if (!values.printSystem) issues.push("Elegí el sistema de impresión.");
+  if (values.printSystem === "sublimation" && typeof values.sublimationFitsA4 !== "boolean") issues.push("Indicá si la sublimación entra en una hoja A4.");
+  if (!Array.isArray(values.workTasks) || values.workTasks.length === 0) issues.push("Elegí al menos una tarea.");
+  if (coreHours <= 0) issues.push("Indicá horas estimadas válidas.");
+  if (hourlyRateMinor == null) issues.push(`Configurá tu economía en ${input.currency}.`);
+
+  let professionalCostMinor = 0;
+  if (coreHours > 0 && hourlyRateMinor != null) {
+    const coreMinor = Math.round(coreHours * hourlyRateMinor);
+    professionalCostMinor += coreMinor;
+    lines.push({ label: "Horas núcleo × tarifa sostenible", kind: "base", amountMinor: coreMinor, detail: `${coreHours.toLocaleString("es-AR")} h × tarifa` });
+    if (preparationRate > 0) {
+      const preparationMinor = Math.round(coreMinor * preparationRate);
+      professionalCostMinor += preparationMinor;
+      const preparationLabel = values.printSystem === "dtf" ? "Preparación para DTF" : "Sublimación dividida en varias hojas";
+      lines.push({ label: preparationLabel, kind: "percentage", amountMinor: preparationMinor, detail: "+15% sólo sobre las horas núcleo" });
+    } else {
+      lines.push({ label: "Preparación de impresión", kind: "percentage", amountMinor: 0, detail: "Sin recargo" });
+    }
+    if (extraHours > 0) {
+      const extrasMinor = Math.round(extraHours * hourlyRateMinor);
+      professionalCostMinor += extrasMinor;
+      lines.push({ label: "Entregables adicionales", kind: "hours", amountMinor: extrasMinor, detail: `${extraHours.toLocaleString("es-AR")} h fuera del recargo técnico` });
+    }
+  }
+
+  let externalCostsMinor = 0;
+  for (const cost of input.externalCosts ?? []) {
+    const converted = convertMinor(cost.amountMinor, cost.currency, input.currency, input.settings.usdToArsMicros);
+    if (converted == null) issues.push(`Falta el cambio USD/ARS para convertir “${cost.name}”.`);
+    else {
+      externalCostsMinor += converted;
+      lines.push({ label: cost.name || "Costo externo", kind: "external", amountMinor: converted, detail: "Fuera del recargo técnico y del margen" });
+    }
+  }
+
+  const complete = issues.length === 0 && hourlyRateMinor != null && coreHours > 0;
+  const economicMargin = profile?.desiredMarginMicros ?? null;
+  const professionalPriceMinor = complete ? withMargin(professionalCostMinor, economicMargin) : null;
+  if (professionalPriceMinor != null && economicMargin) {
+    lines.push({ label: "Margen económico", kind: "margin", amountMinor: professionalPriceMinor - professionalCostMinor, detail: `${(economicMargin / 10_000).toLocaleString("es-AR")}% sobre el servicio profesional` });
+  }
+  const calculated = professionalPriceMinor == null ? null : professionalPriceMinor + externalCostsMinor;
+  const hasOverride = Boolean(input.hasOverride && input.finalOverrideMinor != null);
+  const final = hasOverride ? input.finalOverrideMinor ?? null : null;
+  if (hasOverride && final != null) lines.push({ label: "Precio elegido", kind: "override", amountMinor: final - (calculated ?? 0) });
+
+  return {
+    status: complete ? "ready" : "incomplete",
+    calculatedSubtotalMinor: calculated,
+    suggestedSubtotalMinor: null,
+    finalSubtotalMinor: final,
+    effectiveSubtotalMinor: final,
+    hasOverride,
+    hours: coreHours > 0 ? coreHours + extraHours : null,
+    externalCostsMinor,
+    effectiveHourlyMinor: final != null && coreHours + extraHours > 0 ? Math.round((final - externalCostsMinor) / (coreHours + extraHours)) : null,
+    appliedMarginMicros: economicMargin,
+    lines,
+    issues: [...new Set(issues)],
+  };
+}
+
 export function runPricingEngine(input: EngineInput): ServiceResult {
   const definition = input.pricing.definitions.find((item) => item.serviceType === input.serviceType);
   if (!definition || !definition.enabled) return emptyResult("El servicio no tiene una definición activa.");
@@ -106,6 +189,7 @@ export function runPricingEngine(input: EngineInput): ServiceResult {
   const options = input.pricing.options.filter((item) => parameters.some((parameter) => parameter.id === item.parameterId) && item.enabled);
   const rules = input.pricing.rules.filter((item) => item.serviceDefinitionId === definition.id && item.enabled).sort((a, b) => a.sortOrder - b.sortOrder);
   const profile = economicProfileFor(input.pricing, input.serviceType, input.currency);
+  if (input.serviceType === "print-design") return runPrintDesignPricing(input, profile);
   const hourlyRateMinor = activeHourlyRate(profile);
   const issues: string[] = [];
   const lines: PriceLine[] = [];
@@ -239,6 +323,14 @@ export function createPricingSnapshot(input: EngineInput, result: ServiceResult)
 }
 
 export function resultFromService(service: QuoteService): ServiceResult | null {
+  let printSelectionMinor: number | null = null;
+  if (service.serviceType === "print-design") {
+    try {
+      const envelope = JSON.parse(service.configurationJson) as { data?: { parameterValues?: { priceSelection?: { amountMinor?: unknown } } } };
+      const selected = envelope.data?.parameterValues?.priceSelection?.amountMinor;
+      if (typeof selected === "number" && Number.isFinite(selected) && selected >= 0) printSelectionMinor = selected;
+    } catch { /* el snapshot todavía puede informar el cálculo, nunca una selección implícita */ }
+  }
   if (service.pricingSnapshotJson) {
     try {
       const snapshot = (JSON.parse(service.pricingSnapshotJson) as PricingSnapshot).result;
@@ -247,19 +339,17 @@ export function resultFromService(service: QuoteService): ServiceResult | null {
       // así que los campos persistidos son la fuente de verdad para los precios.
       const calculated = service.calculatedSubtotalMinor ?? snapshot.calculatedSubtotalMinor;
       const suggested = service.suggestedSubtotalMinor ?? snapshot.suggestedSubtotalMinor;
-      const final = service.finalSubtotalMinor
-        ?? service.manualSubtotalMinor
-        ?? snapshot.finalSubtotalMinor
-        ?? suggested
-        ?? calculated;
+      const final = service.serviceType === "print-design"
+        ? printSelectionMinor
+        : service.finalSubtotalMinor ?? service.manualSubtotalMinor ?? snapshot.finalSubtotalMinor ?? suggested ?? calculated;
       return {
         ...snapshot,
-        status: final == null ? snapshot.status : "ready",
+        status: calculated == null ? snapshot.status : "ready",
         calculatedSubtotalMinor: calculated,
         suggestedSubtotalMinor: suggested,
         finalSubtotalMinor: final,
         effectiveSubtotalMinor: final,
-        hasOverride: service.hasOverride,
+        hasOverride: service.serviceType === "print-design" ? printSelectionMinor != null : service.hasOverride,
         effectiveHourlyMinor: final != null && snapshot.hours && snapshot.hours > 0
           ? Math.round((final - snapshot.externalCostsMinor) / snapshot.hours)
           : snapshot.effectiveHourlyMinor,
@@ -267,6 +357,8 @@ export function resultFromService(service: QuoteService): ServiceResult | null {
     } catch { /* fallback below */ }
   }
   if (service.finalSubtotalMinor == null && service.calculatedSubtotalMinor == null) return null;
-  const final = service.finalSubtotalMinor ?? service.manualSubtotalMinor ?? service.suggestedSubtotalMinor ?? service.calculatedSubtotalMinor;
-  return { status: final == null ? "incomplete" : "ready", calculatedSubtotalMinor: service.calculatedSubtotalMinor, suggestedSubtotalMinor: service.suggestedSubtotalMinor, finalSubtotalMinor: final, effectiveSubtotalMinor: final, hasOverride: service.hasOverride, hours: null, externalCostsMinor: 0, effectiveHourlyMinor: null, appliedMarginMicros: null, lines: [], issues: [] };
+  const final = service.serviceType === "print-design"
+    ? printSelectionMinor
+    : service.finalSubtotalMinor ?? service.manualSubtotalMinor ?? service.suggestedSubtotalMinor ?? service.calculatedSubtotalMinor;
+  return { status: service.calculatedSubtotalMinor == null ? "incomplete" : "ready", calculatedSubtotalMinor: service.calculatedSubtotalMinor, suggestedSubtotalMinor: service.suggestedSubtotalMinor, finalSubtotalMinor: final, effectiveSubtotalMinor: final, hasOverride: service.serviceType === "print-design" ? final != null : service.hasOverride, hours: null, externalCostsMinor: 0, effectiveHourlyMinor: null, appliedMarginMicros: null, lines: [], issues: [] };
 }

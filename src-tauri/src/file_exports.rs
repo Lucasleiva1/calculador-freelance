@@ -113,7 +113,7 @@ mod tests {
         let guide = economy_template("ai-guide", Some("Programación"), Some("ARS")).expect("guide");
         let json =
             economy_template("json-template", Some("Programación"), Some("ARS")).expect("json");
-        assert!(guide.contents.contains("perfil manual completo"));
+        assert!(guide.contents.contains("preguntarme antes de calcular"));
         assert!(guide.contents.contains("Programación"));
         assert_eq!(guide.file_name, "guia-ia-programacion-ars.md");
         assert!(!guide.contents.contains("{{ACTIVIDAD}}"));
@@ -141,6 +141,7 @@ mod tests {
         assert_eq!(print_guide.file_name, "guia-ia-diseno-estampas-ars.md");
         assert_eq!(print_json.file_name, "economia-diseno-estampas-ars.json");
         assert!(print_guide.contents.contains("Diseño de estampas"));
+        assert!(print_guide.contents.contains("No inventes"));
         assert!(!print_guide.contents.contains(": null"));
         assert!(economy_template("unknown", None, None).is_err());
     }

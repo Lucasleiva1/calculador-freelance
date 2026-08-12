@@ -24,7 +24,7 @@ describe("ResultInspector", () => {
     fireEvent.click(screen.getByRole("button", { name: /ver fuentes/i }));
     expect(screen.getByText("La región no coincide con esta cotización.")).toBeInTheDocument();
     expect(screen.getByText(/Convertido:.*tasa 1\.498,5/i)).toBeInTheDocument();
-    expect(screen.getByText("Local / sostenible")).toBeInTheDocument();
+    expect(screen.getByText("Sostenible")).toBeInTheDocument();
     expect(screen.getByText("Mercado")).toBeInTheDocument();
     expect(screen.getByText("Internacional")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /ver en ars/i })).toBeInTheDocument();
@@ -49,5 +49,18 @@ describe("ResultInspector", () => {
     render(<ResultInspector currency="ARS" activeServiceId="service" suggestionsEnabled market={null} marketJob={null} onUpdateMarket={async () => undefined} onCancelMarket={async () => undefined} onConfigureEconomy={vi.fn()} result={result} />);
     expect(screen.getAllByText("Completá “Origen del diseño”.").length).toBeGreaterThan(0);
     expect(screen.queryByRole("button", { name: /completar datos/i })).not.toBeInTheDocument();
+  });
+
+  it("en Estampas guarda una elección sostenible explícita y no ofrece un cuarto precio manual", () => {
+    const onFinalPriceChange = vi.fn();
+    const service: QuoteService = { id: "print", quoteId: "quote", serviceType: "print-design", title: "Estampa", sortOrder: 0, configurationVersion: 3, configurationJson: "{}", calculatedSubtotalMinor: 50_000, suggestedSubtotalMinor: null, finalSubtotalMinor: null, hasOverride: false, manualSubtotalMinor: null, manualReason: null, pricingSnapshotJson: null, serviceDefinitionVersion: 2, rowRevision: 0, deletedAt: null, createdAt: "", updatedAt: "" };
+    const serviceResult: ServiceResult = { status: "ready", calculatedSubtotalMinor: 50_000, suggestedSubtotalMinor: null, finalSubtotalMinor: null, effectiveSubtotalMinor: null, hasOverride: false, hours: 2, externalCostsMinor: 0, effectiveHourlyMinor: null, appliedMarginMicros: null, lines: [], issues: [] };
+    const result: ProjectResult = { services: [{ service, result: serviceResult }], totalMinor: null, totalHours: 2, externalCostsMinor: 0, effectiveHourlyMinor: null, marginMicros: null, pricingTiers: { floorMinor: null, recommendedMinor: null, premiumMinor: null }, unpricedCount: 1, isPartial: false };
+    render(<ResultInspector currency="ARS" activeServiceId="print" suggestionsEnabled market={null} marketJob={null} onUpdateMarket={async () => undefined} onCancelMarket={async () => undefined} onFinalPriceChange={onFinalPriceChange} result={result} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Usar este precio" }));
+
+    expect(onFinalPriceChange).toHaveBeenCalledWith(50_000, "Elegido desde Precio sostenible", expect.objectContaining({ kind: "sustainable", amountMinor: 50_000, currency: "ARS", marketSnapshotId: null }));
+    expect(screen.queryByText("Ajustar el precio final")).not.toBeInTheDocument();
   });
 });

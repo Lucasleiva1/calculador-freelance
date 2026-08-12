@@ -78,6 +78,9 @@ export function EconomySettings({ pricing, onSave, initialCurrency = "ARS", init
       if (result.values.activity && normalizedActivity(result.values.activity) !== normalizedActivity(selectedEngine.name)) {
         throw new Error(`Este archivo corresponde a ${result.values.activity}, pero estás configurando ${selectedEngine.name}. Elegí la profesión correcta antes de importarlo.`);
       }
+      if (result.values.currency && result.values.currency !== currency) {
+        throw new Error(`Este archivo está expresado en ${result.values.currency}, pero el perfil abierto usa ${currency}. Elegí la moneda correcta antes de importarlo.`);
+      }
       setImported(result);
       setStatus(result.missingFields.length > 0
         ? `Archivo incompleto para ${selectedEngine.name}: faltan ${result.missingFields.length} campos económicos.`

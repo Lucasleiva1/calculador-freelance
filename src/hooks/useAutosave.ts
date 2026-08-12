@@ -4,8 +4,10 @@ import { api } from "../services/api";
 
 interface QueueEntry {
   latest: SaveServiceInput;
+  confirmedRevision: number;
   timer: ReturnType<typeof setTimeout> | null;
   saving: boolean;
+  dirty: boolean;
   waiters: Array<(ok: boolean) => void>;
 }
 
@@ -41,10 +43,12 @@ export function useAutosave(onSaved: (service: QuoteService) => void) {
       const saved = await api.saveService(payload);
       onSaved(saved);
       entry.saving = false;
+      entry.confirmedRevision = saved.rowRevision;
       if (entry.latest !== payload) {
         entry.latest = { ...entry.latest, expectedRevision: saved.rowRevision };
         void runRef.current(id);
       } else {
+        entry.dirty = false;
         setStatus(id, "saved");
         entry.waiters.splice(0).forEach((resolve) => resolve(true));
       }
@@ -59,8 +63,19 @@ export function useAutosave(onSaved: (service: QuoteService) => void) {
 
   const schedule = useCallback((input: SaveServiceInput, immediate = false) => {
     const existing = queue.current.get(input.id);
-    const entry: QueueEntry = existing ?? { latest: input, timer: null, saving: false, waiters: [] };
-    entry.latest = input;
+    const entry: QueueEntry = existing ?? {
+      latest: input,
+      confirmedRevision: input.expectedRevision,
+      timer: null,
+      saving: false,
+      dirty: true,
+      waiters: [],
+    };
+    entry.latest = {
+      ...input,
+      expectedRevision: Math.max(input.expectedRevision, entry.confirmedRevision),
+    };
+    entry.dirty = true;
     if (entry.timer) clearTimeout(entry.timer);
     queue.current.set(input.id, entry);
     setStatus(input.id, "saving");
@@ -72,7 +87,7 @@ export function useAutosave(onSaved: (service: QuoteService) => void) {
 
   const flushAll = useCallback(async (): Promise<boolean> => {
     const waits = [...queue.current.entries()].map(([id, entry]) => {
-      if (!entry.timer && !entry.saving && statuses[id] !== "saving") return Promise.resolve(statuses[id] !== "error");
+      if (!entry.dirty && !entry.saving) return Promise.resolve(true);
       return new Promise<boolean>((resolve) => {
         entry.waiters.push(resolve);
         if (!entry.saving) void run(id);
@@ -80,7 +95,7 @@ export function useAutosave(onSaved: (service: QuoteService) => void) {
     });
     const results = await Promise.all(waits);
     return results.every(Boolean);
-  }, [run, statuses]);
+  }, [run]);
 
   return { statuses, errors, schedule, retry, flushAll };
 }

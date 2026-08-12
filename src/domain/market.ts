@@ -59,6 +59,8 @@ export interface MarketQueryContext {
   quantity: number | null;
   estimatedHours: number | null;
   features: string[];
+  clientTier: string | null;
+  workClass: string | null;
 }
 
 function durationMinutes(value: unknown) {
@@ -77,18 +79,25 @@ export function buildMarketQueryContext(service: QuoteService, scope: "argentina
   const allowedFeatures = service.serviceType === "video-editing"
     ? new Set(["resolution", "editingLevel", "revisions", "urgency", "formats", "color", "audio", "subtitles", "videoAi", "voiceAi", "soundAi", "backgroundRemoval", "motion", "broll", "additionalVersions"])
     : service.serviceType === "print-design"
-      ? new Set(["mainWorkType", "additionalOperations", "complexity", "inputQuality", "backgroundLevel", "restorationLevel", "vectorizationLevel", "compositionLevel", "aiLevel", "typographyLevel", "colorLevel", "printOutput", "halftoneLevel", "elementCountBand", "initialProposals", "includedRevisions", "variantLevel", "editableDelivery", "urgency", "designOrigin"])
+      ? new Set(["hasReference", "materialType", "clientTier", "productType", "garmentTone", "printSystem", "sublimationFitsA4", "workTasks", "complexity", "deliveryExtras"])
       : new Set(["projectType", "frontend", "backend", "database", "auth", "integrations", "screens", "responsive", "deploy", "ai", "complexity"]);
   const features = Object.entries(values).filter(([key, value]) => allowedFeatures.has(key) && (value === true || (Array.isArray(value) && value.length > 0) || (typeof value === "string" && !["", "none", "basic", "normal"].includes(value)))).map(([key]) => key);
   return {
     service: service.serviceType,
-    subtype: string(service.serviceType === "video-editing" ? "pieceType" : service.serviceType === "print-design" ? "mainWorkType" : "projectType"),
+    subtype: string(service.serviceType === "video-editing" ? "pieceType" : service.serviceType === "print-design" ? "productType" : "projectType"),
     regionTargets: regions,
     level: string(service.serviceType === "video-editing" ? "editingLevel" : "complexity"),
     durationMinutes: durationMinutes(values.finalDuration),
     quantity: number("quantity"),
     estimatedHours: number("estimatedHours"),
     features,
+    clientTier: service.serviceType === "print-design" ? ({ small: "C", medium: "B", large: "A" }[string("clientTier") ?? ""] ?? null) : null,
+    workClass: service.serviceType === "print-design" ? (() => {
+      const tasks = Array.isArray(values.workTasks) ? values.workTasks : [];
+      if (values.hasReference === false || tasks.includes("design-from-scratch")) return "original";
+      if (tasks.some((task) => ["adapt-composition", "grunge-borders", "ai-elements", "reconstruct-image"].includes(String(task)))) return "adaptation";
+      return "preparation";
+    })() : null,
   };
 }
 

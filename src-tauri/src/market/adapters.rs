@@ -765,6 +765,29 @@ impl SourceAdapter for ArdgPrintDesignAdapter {
             });
         }
 
+        let uniforme = Regex::new(
+            r"(?i)Uniforme[^$]{0,20}\$\s*([0-9.]+)[^$]{0,20}\$\s*([0-9.]+)[^$]{0,20}\$\s*([0-9.]+)",
+        )
+        .expect("ardg uniforme prices");
+        if let Some(capture) = uniforme.captures(&text) {
+            for (index, tier) in ["A", "B", "C"].iter().enumerate() {
+                let Some(value) = capture.get(index + 1).and_then(|value| parse_localized_minor(value.as_str(), "ARS", "es-AR")) else { continue; };
+                rows.push(ObservationDraft {
+                    service_type: context.service.clone(),
+                    subservice: Some("Adaptación de marca para indumentaria".into()),
+                    category: Some("ARDG · Promocionales · Uniforme".into()),
+                    region: "AR".into(), country: Some("Argentina".into()), currency: "ARS".into(),
+                    price_type: "PROJECT".into(), unit: "por proyecto".into(),
+                    price_min_minor: None, price_max_minor: None, price_value_minor: Some(value),
+                    original_value_text: format!("ARS {} por adaptación de uniforme · Cliente {tier}", value as f64 / 100.0),
+                    experience_level: None, client_tier: Some((*tier).into()), source_url: final_url.into(),
+                    published_at: Some("2026-07-01".into()), confidence: "HIGH".into(), comparison_eligibility: "ELIGIBLE".into(), exclusion_reason: None,
+                    evidence_snippet: Some(format!("ARDG · Uniforme · Cliente {tier}: ARS {}", value as f64 / 100.0)),
+                    notes: Some("Benchmark argentino específico para adaptar una marca a indumentaria.".into()),
+                });
+            }
+        }
+
         let remera = Regex::new(
             r"(?i)Remera[^$]{0,20}\$\s*([0-9.]+)[^$]{0,20}\$\s*([0-9.]+)[^$]{0,20}\$\s*([0-9.]+)",
         )
@@ -927,7 +950,7 @@ fn extract_named_hourly_ranges(
             minimum as f64 / 100.0,
             maximum as f64 / 100.0
         ));
-        row.notes = Some("Benchmark publico por experiencia; se combina con el calculo sostenible y nunca cambia el precio final sin confirmacion.".into());
+        row.notes = Some("Benchmark público por experiencia. Es una referencia internacional independiente y nunca cambia el precio final sin confirmación.".into());
         rows.push(row);
     }
     rows

@@ -58,4 +58,15 @@ describe("EconomySettings", () => {
     expect(await screen.findByText(/corresponde a edición de video, pero estás configurando programación/i)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /aplicar a programación/i })).not.toBeInTheDocument();
   });
+
+  it("rechaza un archivo de otra moneda antes de aplicarlo", async () => {
+    const { container } = render(<EconomySettings pricing={pricing} onSave={async () => undefined} initialEngineKey="programming" initialCurrency="ARS" />);
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+    const file = new File(['{"actividad":"Programación","moneda":"USD","tarifaManualPorHora":30}'], "economia-usd.json", { type: "application/json" });
+
+    fireEvent.change(input, { target: { files: [file] } });
+
+    expect(await screen.findByText(/está expresado en USD, pero el perfil abierto usa ARS/i)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /aplicar a programación/i })).not.toBeInTheDocument();
+  });
 });

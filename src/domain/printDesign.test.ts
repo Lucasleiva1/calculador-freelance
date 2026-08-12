@@ -1,53 +1,46 @@
 import { describe, expect, it } from "vitest";
-import { canonicalizePrintDesignValues, estimatePrintDesignEffort, normalizePrintDesignEffort } from "./printDesign";
+import { canonicalizePrintDesignValues, estimatePrintDesignEffort, normalizePrintDesignEffort, suggestedPrintDesignComplexity } from "./printDesign";
 
-describe("estimación de esfuerzo para diseño de estampas", () => {
-  it("estima horas cuando el alcance tiene tipo y complejidad", () => {
-    const estimate = estimatePrintDesignEffort({
-      mainWorkType: "design-from-scratch",
-      complexity: "high",
-      inputQuality: "bad",
-      additionalOperations: ["add-text", "vectorize", "prepare-dtf"],
+describe("Diseño de estampas v3", () => {
+  it("clasifica puntajes y fuerza complejo al crear desde cero", () => {
+    expect(suggestedPrintDesignComplexity({ hasReference: true, materialType: "low-quality", workTasks: ["remove-background"] })).toEqual({ complexity: "basic", score: 2 });
+    expect(suggestedPrintDesignComplexity({ hasReference: true, workTasks: ["reconstruct-image", "adapt-composition"] })).toEqual({ complexity: "intermediate", score: 5 });
+    expect(suggestedPrintDesignComplexity({ hasReference: false, workTasks: ["design-from-scratch"] })).toEqual({ complexity: "complex", score: 4 });
+  });
+
+  it("estima desde base, tareas, conceptualización, multiplicador y cuartos de hora", () => {
+    const estimate = estimatePrintDesignEffort({ hasReference: false, workTasks: ["design-from-scratch"] });
+    expect(estimate.hours).toBe(8.75);
+    expect(estimate.complexity).toBe("complex");
+  });
+
+  it("respeta el override exacto hasta restaurar el modo automático", () => {
+    const manual = normalizePrintDesignEffort({ hasReference: false, workTasks: ["design-from-scratch"], estimatedHours: 2.5, estimatedHoursMode: "manual" });
+    expect(manual.estimatedHours).toBe(2.5);
+    const automatic = normalizePrintDesignEffort({ ...manual, estimatedHoursMode: "automatic" });
+    expect(automatic.estimatedHours).toBe(8.75);
+  });
+
+  it("migra tareas, origen, calidad, impresión y editables anteriores", () => {
+    const migrated = canonicalizePrintDesignValues({
+      designOrigin: "existing-design", mainWorkType: "vector-corrected", inputQuality: "bad",
+      additionalOperations: ["remove-background", "apply-halftone", "prepare-dtf"], editableDelivery: "psd",
     });
-    expect(estimate?.hours).toBeGreaterThan(10);
+    expect(migrated.hasReference).toBe(true);
+    expect(migrated.materialType).toBe("low-quality");
+    expect(migrated.printSystem).toBe("dtf");
+    expect(migrated.workTasks).toEqual(expect.arrayContaining(["vectorize-simple", "remove-background", "halftone"]));
+    expect(migrated.deliveryExtras).toEqual(["psd"]);
   });
 
-  it("guarda la estimación automática para que las fuentes horarias puedan normalizarse", () => {
-    const normalized = normalizePrintDesignEffort({ mainWorkType: "vector-corrected", complexity: "medium" });
-    expect(normalized.estimatedHoursMode).toBe("automatic");
-    expect(normalized.estimatedHours).toBeGreaterThan(0);
-  });
-
-  it("nunca reemplaza un tiempo manual existente", () => {
-    const normalized = normalizePrintDesignEffort({ mainWorkType: "design-from-scratch", complexity: "premium", estimatedHours: 2.5 });
-    expect(normalized.estimatedHoursMode).toBe("manual");
-    expect(normalized.estimatedHours).toBe(2.5);
-  });
-
-  it("recalcula si el modo ya es automático", () => {
-    const normalized = normalizePrintDesignEffort({ mainWorkType: "redraw-full", complexity: "high", estimatedHours: 1, estimatedHoursMode: "automatic" });
-    expect(normalized.estimatedHours).toBeGreaterThan(1);
-  });
-
-  it("hace participar las tareas detalladas que representan trabajo", () => {
-    const base = estimatePrintDesignEffort({ mainWorkType: "design-from-scratch", complexity: "medium" });
-    const detailed = estimatePrintDesignEffort({ mainWorkType: "design-from-scratch", complexity: "medium", aiActions: ["multiple-tests", "photoshop-retouch"], printActions: ["png", "review-contrast"], editableDelivery: "psd" });
-    expect(detailed!.hours).toBeGreaterThan(base!.hours);
-  });
-
-  it("unifica opciones antiguas duplicadas en sus campos canónicos", () => {
-    const values = canonicalizePrintDesignValues({ additionalOperations: ["prepare-dtf", "apply-halftone", "deliver-editable", "vectorize"] });
-    expect(values.additionalOperations).toEqual(["vectorize"]);
-    expect(values.printOutput).toEqual(["dtf"]);
-    expect(values.halftoneLevel).toBe("simple");
-    expect(values.editableDelivery).toBe("other");
-  });
-
-  it("completa urgencia y origen coherentes cuando el alcance ya los determina", () => {
-    const fromScratch = canonicalizePrintDesignValues({ mainWorkType: "design-from-scratch" });
-    expect(fromScratch.urgency).toBe("normal");
-    expect(fromScratch.designOrigin).toBe("from-scratch");
-    const restoration = canonicalizePrintDesignValues({ mainWorkType: "restore-image" });
-    expect(restoration.designOrigin).toBe("reference-to-redo");
+  it("limpia valores condicionales y marca contradicciones antiguas para reselección", () => {
+    const cleaned = canonicalizePrintDesignValues({ hasReference: false, materialType: "screenshot", printSystem: "dtf", sublimationFitsA4: false, productType: "shirt", otherProduct: "Taza" });
+    expect(cleaned.materialType).toBeUndefined();
+    expect(cleaned.sublimationFitsA4).toBeUndefined();
+    expect(cleaned.otherProduct).toBeUndefined();
+    const ambiguous = canonicalizePrintDesignValues({ designOrigin: "from-scratch", mainWorkType: "background-complex" });
+    expect(ambiguous.hasReference).toBeUndefined();
+    expect(ambiguous.designOrigin).toBeUndefined();
+    expect(ambiguous.mainWorkType).toBeUndefined();
   });
 });

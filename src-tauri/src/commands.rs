@@ -442,6 +442,20 @@ async fn default_configuration(
                 "data": { "parameterValues": {}, "externalCosts": [], "notes": "" }
             }),
         ),
+        "print-design" => (
+            "Diseño de estampas",
+            serde_json::json!({
+                "schemaVersion": 3, "serviceType": "print-design",
+                "data": {
+                    "parameterValues": {
+                        "workTasks": [], "deliveryExtras": [],
+                        "complexityMode": "automatic", "estimatedHoursMode": "automatic",
+                        "effortUnit": "hours", "hoursPerDay": 8
+                    },
+                    "externalCosts": [], "notes": ""
+                }
+            }),
+        ),
         _ => {
             let engine: (String, String) = sqlx::query_as(
                 "SELECT name,calculator_key FROM pricing_engines WHERE engine_key=? AND status='active' AND archived_at IS NULL",
@@ -503,11 +517,12 @@ pub async fn add_quote_service(
             .bind(&quote_id).fetch_one(&mut *tx).await?;
         let id = Uuid::new_v4().to_string();
         let title = if count == 0 { base_title } else { format!("{} {}", base_title, count + 1) };
+        let configuration_version = match service_type.as_str() { "print-design" => 3, "programming" => 2, _ => 1 };
         let timestamp = now();
         sqlx::query(
             "INSERT INTO quote_services (id, quote_id, service_type, title, sort_order, configuration_version,
-             configuration_json, row_revision, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 1, ?, 0, ?, ?)",
-        ).bind(&id).bind(&quote_id).bind(&service_type).bind(&title).bind(order).bind(&configuration)
+             configuration_json, row_revision, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)",
+        ).bind(&id).bind(&quote_id).bind(&service_type).bind(&title).bind(order).bind(configuration_version).bind(&configuration)
          .bind(&timestamp).bind(&timestamp).execute(&mut *tx).await?;
         sqlx::query("UPDATE quotes SET updated_at = ? WHERE id = ?").bind(&timestamp).bind(&quote_id).execute(&mut *tx).await?;
         tx.commit().await?;

@@ -94,7 +94,52 @@ describe("economía sostenible", () => {
     expect(missing.issues).toContain("Configurá tu economía en USD.");
 
     const ownProfile: EconomicProfile = { ...profile, engineId: printEngine.id, desiredMarginMicros: null, manualHourlyRateMinor: 2_500 };
-    const ready = runPricingEngine({ serviceType: "print-design", currency: "USD", parameterValues: { estimatedHours: 2.5 }, settings, pricing: { ...isolatedPricing, economicProfiles: [profile, ownProfile] } });
+    const parameterValues = { hasReference: true, materialType: "ready", clientTier: "small", productType: "shirt", garmentTone: "light", printSystem: "design-only", workTasks: ["optimize-image"], complexity: "basic", estimatedHours: 2.5 };
+    const ready = runPricingEngine({ serviceType: "print-design", currency: "USD", parameterValues, settings, pricing: { ...isolatedPricing, economicProfiles: [profile, ownProfile] } });
     expect(ready.calculatedSubtotalMinor).toBe(6_250);
+    expect(ready.finalSubtotalMinor).toBeNull();
+    expect(ready.status).toBe("ready");
+  });
+
+  it("aplica DTF sólo al núcleo, agrega extras después y deja externos fuera del margen", () => {
+    const printDefinition: ServiceDefinition = { ...definition, id: "service-print-design", serviceType: "print-design", name: "Diseño de estampas" };
+    const printEngine: PricingEngine = { ...engine, id: "engine-print-design", engineKey: "print-design", name: "Diseño de estampas", serviceDefinitionId: printDefinition.id };
+    const printProfile: EconomicProfile = { ...profile, engineId: printEngine.id, desiredMarginMicros: 200_000, manualHourlyRateMinor: 2_500 };
+    const printPricing: PricingConfiguration = { ...pricing, definitions: [printDefinition], parameters: [], options: [], rules: [], pricingEngines: [printEngine], economicProfiles: [printProfile] };
+    const baseValues = { hasReference: true, materialType: "ready", clientTier: "medium", productType: "shirt", garmentTone: "dark", printSystem: "dtf", workTasks: ["optimize-image"], complexity: "basic", estimatedHours: 2, deliveryExtras: ["psd"] };
+    const result = runPricingEngine({ serviceType: "print-design", currency: "USD", parameterValues: baseValues, externalCosts: [{ id: "printing", name: "Impresión tercerizada", amountMinor: 1_000, currency: "USD", note: "" }], settings, pricing: printPricing });
+    // Núcleo 5.000 + DTF 750 + extra 1.250 = 7.000; margen 20% = 8.750; externo = 1.000.
+    expect(result.calculatedSubtotalMinor).toBe(9_750);
+    expect(result.lines.find((line) => line.label === "Preparación para DTF")?.amountMinor).toBe(750);
+    expect(result.lines.find((line) => line.label === "Entregables adicionales")?.amountMinor).toBe(1_250);
+    expect(result.finalSubtotalMinor).toBeNull();
+  });
+
+  it("distingue sublimación A4 de sublimación dividida", () => {
+    const printDefinition: ServiceDefinition = { ...definition, id: "service-print-design", serviceType: "print-design", name: "Diseño de estampas" };
+    const printEngine: PricingEngine = { ...engine, id: "engine-print-design", engineKey: "print-design", name: "Diseño de estampas", serviceDefinitionId: printDefinition.id };
+    const printProfile: EconomicProfile = { ...profile, engineId: printEngine.id, desiredMarginMicros: null, manualHourlyRateMinor: 2_500 };
+    const printPricing: PricingConfiguration = { ...pricing, definitions: [printDefinition], parameters: [], options: [], rules: [], pricingEngines: [printEngine], economicProfiles: [printProfile] };
+    const values = { hasReference: true, materialType: "ready", clientTier: "small", productType: "shirt", garmentTone: "light", printSystem: "sublimation", workTasks: ["optimize-image"], complexity: "basic", estimatedHours: 2 };
+    const a4 = runPricingEngine({ serviceType: "print-design", currency: "USD", parameterValues: { ...values, sublimationFitsA4: true }, settings, pricing: printPricing });
+    const divided = runPricingEngine({ serviceType: "print-design", currency: "USD", parameterValues: { ...values, sublimationFitsA4: false }, settings, pricing: printPricing });
+    expect(a4.calculatedSubtotalMinor).toBe(5_000);
+    expect(divided.calculatedSubtotalMinor).toBe(5_750);
+  });
+
+  it("no convierte el sostenible ni el mercado en precio final sin una elección", () => {
+    const snapshotResult = { ...runPricingEngine(input), finalSubtotalMinor: 99_000, effectiveSubtotalMinor: 99_000 };
+    const printService: QuoteService = {
+      id: "print", quoteId: "quote", serviceType: "print-design", title: "Estampa", sortOrder: 0,
+      configurationVersion: 3, configurationJson: "{}", calculatedSubtotalMinor: 50_000,
+      suggestedSubtotalMinor: 70_000, finalSubtotalMinor: null, hasOverride: false,
+      manualSubtotalMinor: null, manualReason: null,
+      pricingSnapshotJson: JSON.stringify({ ...createPricingSnapshot(input, snapshotResult), result: snapshotResult }),
+      serviceDefinitionVersion: 2, rowRevision: 0, deletedAt: null, createdAt: stamp, updatedAt: stamp,
+    };
+    const visible = resultFromService(printService)!;
+    expect(visible.calculatedSubtotalMinor).toBe(50_000);
+    expect(visible.suggestedSubtotalMinor).toBe(70_000);
+    expect(visible.finalSubtotalMinor).toBeNull();
   });
 });

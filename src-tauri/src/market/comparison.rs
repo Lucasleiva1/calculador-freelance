@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, Duration, NaiveDate, Utc};
 
@@ -93,8 +93,8 @@ fn percentile(values: &[i64], percentile: f64) -> Option<i64> {
     }
 }
 
-fn is_recent(value: Option<&str>) -> bool {
-    let cutoff = Utc::now() - Duration::days(730);
+fn is_recent(value: Option<&str>, region: &str) -> bool {
+    let cutoff = Utc::now() - Duration::days(if region == "AR" { 120 } else { 365 });
     value
         .and_then(|raw| {
             DateTime::parse_from_rfc3339(raw)
@@ -135,13 +135,47 @@ fn level_matches(observation: &MarketObservation, context: &MarketQueryContext) 
         "basic" | "low" => ["junior", "entry", "principiante"]
             .iter()
             .any(|value| level.contains(value)),
-        "professional" | "medium" => ["mid", "intermediate", "intermedio"]
+        "professional" | "medium" | "intermediate" => ["mid", "intermediate", "intermedio"]
             .iter()
             .any(|value| level.contains(value)),
-        "advanced" | "high" => ["senior", "expert", "lead"]
+        "advanced" | "high" | "complex" => ["senior", "expert", "lead"]
             .iter()
             .any(|value| level.contains(value)),
         _ => true,
+    }
+}
+
+fn client_tier_matches(observation: &MarketObservation, context: &MarketQueryContext) -> bool {
+    if context.service != "print-design" || observation.region != "AR" {
+        return true;
+    }
+    match (observation.client_tier.as_deref(), context.client_tier.as_deref()) {
+        (Some(actual), Some(expected)) => actual.eq_ignore_ascii_case(expected),
+        (Some(_), None) => false,
+        (None, _) => true,
+    }
+}
+
+fn print_scope_matches(observation: &MarketObservation, context: &MarketQueryContext) -> bool {
+    if context.service != "print-design" || observation.region != "AR" {
+        return true;
+    }
+    let description = format!(
+        "{} {}",
+        observation.subservice.as_deref().unwrap_or_default(),
+        observation.category.as_deref().unwrap_or_default()
+    ).to_lowercase();
+    if ["impresión física", "impresion fisica", "prenda incluida", "dtf tercerizado"]
+        .iter().any(|term| description.contains(term)) {
+        return false;
+    }
+    if context.subtype.as_deref() != Some("shirt") {
+        return observation.price_type == "HOURLY";
+    }
+    match context.work_class.as_deref() {
+        Some("adaptation") => observation.price_type == "PROJECT" && description.contains("uniforme"),
+        Some("original") => observation.price_type == "PROJECT" && description.contains("remera"),
+        _ => observation.price_type == "HOURLY",
     }
 }
 
@@ -202,7 +236,6 @@ pub fn compare_market(
 ) -> (Vec<ComparableObservation>, ComparisonSummary) {
     let mut comparable = Vec::new();
     let mut salary_excluded = 0;
-    let mut recent_count = 0;
     let mut reliable_count = 0;
     for observation in observations {
         if observation.service_type != context.service && observation.service_type != "currency" {
@@ -218,14 +251,22 @@ pub fn compare_market(
             .published_at
             .as_deref()
             .or(Some(&observation.retrieved_at));
-        let normalized = if !is_recent(observation_date) {
-            Err("La referencia tiene más de dos años y se conserva sólo como historial.".into())
+        let normalized = if !is_recent(observation_date, &observation.region) {
+            Err(if observation.region == "AR" {
+                "La referencia argentina superó 120 días y queda sólo como historial."
+            } else {
+                "La referencia internacional superó 12 meses y queda sólo como historial."
+            }.into())
         } else if !participating_source_ids.contains(&observation.source_id) {
             Err("La fuente aporta contexto, pero no participa en sugerencias.".into())
         } else if !region_matches(&observation.region, &context.region_targets) {
             Err("La región no coincide con el objetivo de esta cotización.".into())
         } else if !level_matches(observation, context) {
             Err("El nivel profesional no coincide con la complejidad elegida.".into())
+        } else if !client_tier_matches(observation, context) {
+            Err("La categoría A/B/C no coincide con el cliente elegido.".into())
+        } else if !print_scope_matches(observation, context) {
+            Err("La referencia no corresponde al producto y tipo de trabajo elegidos.".into())
         } else if !subtype_matches(observation, context) {
             Err("El subservicio no coincide con el alcance concreto de la cotización.".into())
         } else if observation.comparison_eligibility == "ELIGIBLE" {
@@ -238,9 +279,6 @@ pub fn compare_market(
         };
         match normalized {
             Ok(value) => {
-                if is_recent(observation_date) {
-                    recent_count += 1;
-                }
                 if matches!(observation.confidence.as_str(), "HIGH" | "MEDIUM") {
                     reliable_count += 1;
                 }
@@ -261,34 +299,44 @@ pub fn compare_market(
             }),
         }
     }
-    let mut initial = comparable
-        .iter()
-        .filter(|item| item.included)
-        .filter_map(|item| item.normalized_value_minor)
-        .collect::<Vec<_>>();
+    let aggregate_by_source = |items: &[ComparableObservation]| {
+        let mut grouped: HashMap<&str, Vec<i64>> = HashMap::new();
+        for item in items.iter().filter(|item| item.included) {
+            if let Some(value) = item.normalized_value_minor {
+                grouped.entry(item.source_id.as_str()).or_default().push(value);
+            }
+        }
+        grouped.into_values().filter_map(|mut values| {
+            values.sort_unstable();
+            percentile(&values, 0.5)
+        }).collect::<Vec<_>>()
+    };
+    let mut initial = aggregate_by_source(&comparable);
     initial.sort_unstable();
     if initial.len() >= 8 {
         if let (Some(p25), Some(p75)) = (percentile(&initial, 0.25), percentile(&initial, 0.75)) {
             let iqr = p75 - p25;
             let low = p25 - (iqr as f64 * 1.5).round() as i64;
             let high = p75 + (iqr as f64 * 1.5).round() as i64;
+            let mut grouped: HashMap<String, Vec<i64>> = HashMap::new();
+            for item in comparable.iter().filter(|item| item.included) {
+                if let Some(value) = item.normalized_value_minor {
+                    grouped.entry(item.source_id.clone()).or_default().push(value);
+                }
+            }
+            let outlier_sources = grouped.into_iter().filter_map(|(source, mut values)| {
+                values.sort_unstable();
+                percentile(&values, 0.5).filter(|value| *value < low || *value > high).map(|_| source)
+            }).collect::<HashSet<_>>();
             for item in &mut comparable {
-                if item.included
-                    && item
-                        .normalized_value_minor
-                        .is_some_and(|value| value < low || value > high)
-                {
+                if item.included && outlier_sources.contains(&item.source_id) {
                     item.included = false;
-                    item.reason = Some("Posible outlier excluido mediante regla IQR 1,5×.".into());
+                    item.reason = Some("Fuente excluida como posible outlier mediante IQR 1,5×.".into());
                 }
             }
         }
     }
-    let mut values = comparable
-        .iter()
-        .filter(|item| item.included)
-        .filter_map(|item| item.normalized_value_minor)
-        .collect::<Vec<_>>();
+    let mut values = aggregate_by_source(&comparable);
     values.sort_unstable();
     let sources = comparable
         .iter()
@@ -296,6 +344,7 @@ pub fn compare_market(
         .map(|item| item.source_id.as_str())
         .collect::<HashSet<_>>()
         .len() as i64;
+    let recent_count = sources;
     let confidence = if values.len() >= 10 && sources >= 3 && recent_count >= 5 {
         "HIGH"
     } else if values.len() >= 5 && sources >= 2 {
@@ -306,7 +355,7 @@ pub fn compare_market(
         "INSUFFICIENT"
     };
     let explanations = vec![
-        format!("{} observaciones comparables", values.len()),
+        format!("{} valores agregados por fuente", values.len()),
         format!("{} fuentes comparables", sources),
         format!("{} datos recientes", recent_count),
         format!("{} referencias salariales excluidas", salary_excluded),
@@ -475,7 +524,7 @@ mod tests {
         assert_eq!(summary.comparable_count, 0);
         assert_eq!(
             items[0].reason.as_deref(),
-            Some("La referencia tiene más de dos años y se conserva sólo como historial.")
+            Some("La referencia internacional superó 12 meses y queda sólo como historial.")
         );
     }
 
@@ -554,12 +603,56 @@ mod tests {
             .map(|item| item.source_id.clone())
             .collect();
         let context = MarketQueryContext {
-            subtype: Some("design-from-scratch".into()),
+            subtype: Some("shirt".into()),
+            work_class: Some("original".into()),
             estimated_hours: None,
             ..MarketQueryContext::generic("print-design".into(), vec!["AR".into()])
         };
         let (_, summary) = compare_market(&observations, &context, "ARS", None, &participating);
         assert_eq!(summary.comparable_count, 3);
         assert_eq!(summary.median_minor, Some(18_000_000));
+    }
+
+    #[test]
+    fn multiple_rows_from_one_page_count_as_one_source_value() {
+        let mut observations = (1..=6)
+            .map(|value| observation(&format!("row-{value}"), "PROJECT", value * 10_000))
+            .collect::<Vec<_>>();
+        for row in &mut observations { row.source_id = "one-page".into(); }
+        let participating = HashSet::from(["one-page".to_string()]);
+        let (_, summary) = compare_market(
+            &observations,
+            &MarketQueryContext::generic("programming".into(), vec!["INTERNATIONAL".into()]),
+            "USD", None, &participating,
+        );
+        assert_eq!(summary.comparable_count, 1);
+        assert_eq!(summary.source_count, 1);
+        assert_eq!(summary.median_minor, Some(35_000));
+    }
+
+    #[test]
+    fn print_design_filters_ardg_tier_and_never_uses_remera_for_other_products() {
+        let mut hourly_a = observation("hour-a", "HOURLY", 3_000);
+        let mut hourly_b = observation("hour-b", "HOURLY", 4_000);
+        let mut remera_b = observation("shirt-b", "PROJECT", 90_000);
+        for row in [&mut hourly_a, &mut hourly_b, &mut remera_b] {
+            row.source_id = "ardg".into();
+            row.service_type = "print-design".into();
+            row.region = "AR".into();
+        }
+        hourly_a.client_tier = Some("A".into());
+        hourly_b.client_tier = Some("B".into());
+        remera_b.client_tier = Some("B".into());
+        remera_b.category = Some("ARDG · Promocionales · Remera".into());
+        let observations = vec![hourly_a, hourly_b, remera_b];
+        let context = MarketQueryContext {
+            subtype: Some("hoodie".into()), client_tier: Some("B".into()), work_class: Some("original".into()), estimated_hours: Some(2.0),
+            ..MarketQueryContext::generic("print-design".into(), vec!["AR".into()])
+        };
+        let (items, summary) = compare_market(&observations, &context, "USD", None, &HashSet::from(["ardg".to_string()]));
+        assert_eq!(summary.median_minor, Some(8_000));
+        assert_eq!(summary.comparable_count, 1);
+        assert!(items.iter().any(|item| item.observation_id == "shirt-b" && !item.included));
+        assert!(items.iter().any(|item| item.observation_id == "hour-a" && !item.included));
     }
 }

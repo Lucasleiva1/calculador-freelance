@@ -15,14 +15,16 @@ export function EffortInput({
   hoursPerDay,
   estimatedHours,
   onChange,
+  allowedUnits = ["hours", "days", "weeks"],
 }: {
   amount: number | null;
   unit: EffortUnit;
   hoursPerDay: number;
   estimatedHours: number | null;
   onChange: (value: EffortValue) => void;
+  allowedUnits?: EffortUnit[];
 }) {
-  const safeUnit: EffortUnit = ["hours", "days", "weeks"].includes(unit) ? unit : "hours";
+  const safeUnit: EffortUnit = allowedUnits.includes(unit) ? unit : allowedUnits[0] ?? "hours";
   const safeHoursPerDay = Number.isFinite(hoursPerDay) && hoursPerDay > 0 ? hoursPerDay : DEFAULT_HOURS_PER_DAY;
   const shownAmount = amount ?? hoursToEffort(estimatedHours, safeUnit, safeHoursPerDay);
   const convertedHours = effortToHours(shownAmount, safeUnit, safeHoursPerDay);
@@ -52,9 +54,9 @@ export function EffortInput({
       </Field>
       <Field label="Unidad de tiempo">
         <Select aria-label="Unidad de tiempo" value={safeUnit} onChange={(event) => changeUnit(event.target.value as EffortUnit)}>
-          <option value="hours">Horas</option>
-          <option value="days">Días</option>
-          <option value="weeks">Semanas · 7 días</option>
+          {allowedUnits.includes("hours") && <option value="hours">Horas</option>}
+          {allowedUnits.includes("days") && <option value="days">Días</option>}
+          {allowedUnits.includes("weeks") && <option value="weeks">Semanas · 7 días</option>}
         </Select>
       </Field>
     </div>

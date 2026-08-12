@@ -6,6 +6,7 @@ import type { HybridConfiguration, ProductConfiguration } from "./product";
 import { calculateHybrid, calculateProduct } from "./product";
 import { activeHourlyRate, economicProfileFor, emptyResult, resultFromService, runPricingEngine } from "./pricingEngine";
 import type { ServiceConfigurationEnvelope } from "./types";
+import type { PrintDesignPriceSelection } from "./printDesign";
 
 export interface EvaluatedService { service: QuoteService; result: ServiceResult; }
 export interface ProjectResult {
@@ -31,7 +32,8 @@ function liveResult(service: QuoteService, workspace: Workspace, settings: AppSe
     const config = service.serviceType === "programming"
       ? parseProgrammingEnvelope(service.configurationJson).data
       : parseProfessionalEnvelope(service.configurationJson, service.serviceType).data;
-    return runPricingEngine({ serviceType: service.serviceType, currency: workspace.quote.currency, parameterValues: config.parameterValues, externalCosts: config.externalCosts, finalOverrideMinor: service.finalSubtotalMinor ?? service.manualSubtotalMinor, hasOverride: service.hasOverride || service.manualSubtotalMinor != null, settings, pricing });
+    const printSelection = service.serviceType === "print-design" ? config.parameterValues.priceSelection as PrintDesignPriceSelection | undefined : undefined;
+    return runPricingEngine({ serviceType: service.serviceType, currency: workspace.quote.currency, parameterValues: config.parameterValues, externalCosts: config.externalCosts, finalOverrideMinor: service.serviceType === "print-design" ? printSelection?.amountMinor ?? null : service.finalSubtotalMinor ?? service.manualSubtotalMinor, hasOverride: service.serviceType === "print-design" ? Boolean(printSelection) : service.hasOverride || service.manualSubtotalMinor != null, settings, pricing });
   } catch { return emptyResult("La configuración guardada no se pudo leer."); }
 }
 

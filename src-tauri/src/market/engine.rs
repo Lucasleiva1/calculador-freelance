@@ -813,7 +813,7 @@ fn query_context(
     let subtype = values
         .get(match service_type {
             "video-editing" => "pieceType",
-            "print-design" => "mainWorkType",
+            "print-design" => "productType",
             _ => "projectType",
         })
         .and_then(Value::as_str)
@@ -830,6 +830,23 @@ fn query_context(
         parse_duration_minutes(values.get("finalDuration").and_then(Value::as_str));
     let quantity = values.get("quantity").and_then(Value::as_f64);
     let estimated_hours = values.get("estimatedHours").and_then(Value::as_f64);
+    let client_tier = if service_type == "print-design" {
+        values.get("clientTier").and_then(Value::as_str).and_then(|tier| match tier {
+            "small" | "C" => Some("C".to_string()),
+            "medium" | "B" => Some("B".to_string()),
+            "large" | "A" => Some("A".to_string()),
+            _ => None,
+        })
+    } else { None };
+    let work_class = if service_type == "print-design" {
+        let tasks = values.get("workTasks").and_then(Value::as_array);
+        let has_task = |wanted: &str| tasks.is_some_and(|items| items.iter().any(|item| item.as_str() == Some(wanted)));
+        if values.get("hasReference").and_then(Value::as_bool) == Some(false) || has_task("design-from-scratch") {
+            Some("original".to_string())
+        } else if ["adapt-composition", "grunge-borders", "ai-elements", "reconstruct-image"].iter().any(|task| has_task(task)) {
+            Some("adaptation".to_string())
+        } else { Some("preparation".to_string()) }
+    } else { None };
     let regions = match market_scope {
         Some("argentina") => vec!["AR".into()],
         Some("international") => vec!["INTERNATIONAL".into()],
@@ -856,26 +873,16 @@ fn query_context(
         ]
     } else if service_type == "print-design" {
         &[
-            "mainWorkType",
-            "additionalOperations",
+            "hasReference",
+            "materialType",
+            "clientTier",
+            "productType",
+            "garmentTone",
+            "printSystem",
+            "sublimationFitsA4",
+            "workTasks",
             "complexity",
-            "inputQuality",
-            "backgroundLevel",
-            "restorationLevel",
-            "vectorizationLevel",
-            "compositionLevel",
-            "aiLevel",
-            "typographyLevel",
-            "colorLevel",
-            "printOutput",
-            "halftoneLevel",
-            "elementCountBand",
-            "initialProposals",
-            "includedRevisions",
-            "variantLevel",
-            "editableDelivery",
-            "urgency",
-            "designOrigin",
+            "deliveryExtras",
         ]
     } else {
         &[
@@ -916,6 +923,8 @@ fn query_context(
         quantity,
         estimated_hours,
         features,
+        client_tier,
+        work_class,
     }
 }
 
@@ -1174,18 +1183,8 @@ async fn run_research_inner(state: &AppState, job_id: &str, force: bool) -> AppR
     .filter(|observation| enabled_source_ids.contains(&observation.source_id))
     .collect::<Vec<_>>();
     let official_rate: Option<(i64, String, String)> = sqlx::query_as("SELECT rate_micros, rate_date, source_url FROM market_fx_rates WHERE base_currency='USD' AND quote_currency='ARS' ORDER BY rate_date DESC, retrieved_at DESC LIMIT 1").fetch_optional(&state.pool).await?;
-    let manual_rate: Option<i64> =
-        sqlx::query_scalar("SELECT usd_to_ars_micros FROM app_settings WHERE id=1")
-            .fetch_one(&state.pool)
-            .await?;
     let (rate, rate_date, rate_source) = if let Some((rate, date, source)) = official_rate {
         (Some(rate), Some(date), Some(source))
-    } else if let Some(rate) = manual_rate {
-        (
-            Some(rate),
-            Some(Utc::now().date_naive().to_string()),
-            Some("Configuración manual de Pricing OS".to_string()),
-        )
     } else {
         (None, None, None)
     };
@@ -1419,14 +1418,16 @@ mod tests {
 
     #[test]
     fn print_design_context_uses_its_own_professional_parameters() {
-        let json = r#"{"data":{"parameterValues":{"mainWorkType":"vector-corrected","complexity":"high","printOutput":["dtf"],"editableDelivery":"ai","estimatedHours":3.5,"projectType":"must-not-leak"}}}"#;
+        let json = r#"{"data":{"parameterValues":{"hasReference":true,"clientTier":"medium","productType":"shirt","complexity":"complex","printSystem":"dtf","workTasks":["adapt-composition"],"deliveryExtras":["ai-vector"],"estimatedHours":3.5,"projectType":"must-not-leak"}}}"#;
         let context = query_context("print-design", json, Some("both"));
         assert_eq!(context.service, "print-design");
-        assert_eq!(context.subtype.as_deref(), Some("vector-corrected"));
-        assert_eq!(context.level.as_deref(), Some("high"));
+        assert_eq!(context.subtype.as_deref(), Some("shirt"));
+        assert_eq!(context.level.as_deref(), Some("complex"));
+        assert_eq!(context.client_tier.as_deref(), Some("B"));
+        assert_eq!(context.work_class.as_deref(), Some("adaptation"));
         assert_eq!(context.estimated_hours, Some(3.5));
-        assert!(context.features.contains(&"printOutput".into()));
-        assert!(context.features.contains(&"editableDelivery".into()));
+        assert!(context.features.contains(&"printSystem".into()));
+        assert!(context.features.contains(&"deliveryExtras".into()));
         assert!(!context.features.contains(&"projectType".into()));
     }
 
@@ -1584,6 +1585,7 @@ mod tests {
                     ("remoteok".into(), false),
                     ("solopricing".into(), true),
                     ("twine-print-design".into(), true),
+                    ("upwork-print-design".into(), true),
                 ]
             );
         });

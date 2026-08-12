@@ -15,7 +15,7 @@ export function parseProfessionalEnvelope(json: string, serviceType: ServiceType
   const parsed = JSON.parse(json) as ServiceConfigurationEnvelope<Partial<ProfessionalServiceConfiguration> & { category?: string }>;
   const data = parsed.data ?? {};
   return {
-    schemaVersion: 2,
+    schemaVersion: serviceType === "print-design" ? 3 : 2,
     serviceType,
     data: {
       ...defaultProfessionalConfiguration(),

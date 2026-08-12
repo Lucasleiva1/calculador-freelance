@@ -40,7 +40,7 @@ import { SaveQuoteModal } from "../features/quotes/SaveQuoteModal";
 import { QuotesHistoryView } from "../features/quotes/QuotesHistoryView";
 import { ClientDocumentModal } from "../features/quotes/ClientDocumentModal";
 import { PriceCalculationProgress, type PriceCalculationProgressState } from "../components/PriceCalculationProgress";
-import { normalizePrintDesignEffort, printDesignSummary } from "../domain/printDesign";
+import { normalizePrintDesignEffort, printDesignSummary, type PrintDesignPriceSelection } from "../domain/printDesign";
 
 function presetConfiguration(config: VideoConfiguration) {
   return JSON.stringify(Object.fromEntries(Object.entries(config).filter(([key]) => !["effortAmount", "effortUnit", "hoursPerDay", "estimatedHours", "externalCosts", "urgencyFeeMinor"].includes(key))));
@@ -52,7 +52,9 @@ function clientServiceDescription(service: QuoteService, pricing: PricingConfigu
     const config = parseProfessionalEnvelope(service.configurationJson, service.serviceType).data;
     const definition = pricing.definitions.find((item) => item.serviceType === service.serviceType);
     const parameters = pricing.parameters.filter((item) => item.serviceDefinitionId === definition?.id);
-    return printDesignSummary(config.parameterValues, parameters, pricing.options).join(" · ") || undefined;
+    return printDesignSummary(config.parameterValues, parameters, pricing.options)
+      .filter((line) => /^(Producto|Sistema|Trabajo|Entrega):/u.test(line))
+      .join(" · ") || undefined;
   } catch { return undefined; }
 }
 
@@ -92,11 +94,16 @@ export function App() {
       event.preventDefault();
       if (closing.current) return;
       closing.current = true;
-      if (await flushAutosave()) {
+      try {
+        if (!(await flushAutosave())) {
+          closing.current = false;
+          setNotice("No se pudo guardar todo. Revisá el error de guardado e intentá cerrar nuevamente.");
+          return;
+        }
         await api.exitApplication();
-      } else {
+      } catch (error) {
         closing.current = false;
-        setNotice("No se pudo guardar todo. Reintentá antes de cerrar para no perder cambios.");
+        setNotice(`No se pudo cerrar la aplicación: ${String(error)}`);
       }
     }).then((stop) => { unlisten = stop; });
     return () => unlisten?.();
@@ -205,12 +212,15 @@ export function App() {
     const effectiveConfig = service.serviceType === "print-design"
       ? { ...config, parameterValues: normalizePrintDesignEffort(config.parameterValues) }
       : config;
-    const engineInput = { serviceType: service.serviceType, currency: workspace.quote.currency, parameterValues: effectiveConfig.parameterValues, externalCosts: effectiveConfig.externalCosts, finalOverrideMinor: service.finalSubtotalMinor, hasOverride: service.hasOverride, settings: data.settings, pricing: data.pricing };
+    const printSelection = service.serviceType === "print-design" ? effectiveConfig.parameterValues.priceSelection as PrintDesignPriceSelection | undefined : undefined;
+    const finalOverrideMinor = service.serviceType === "print-design" ? printSelection?.amountMinor ?? null : service.finalSubtotalMinor;
+    const hasOverride = service.serviceType === "print-design" ? Boolean(printSelection) : service.hasOverride;
+    const engineInput = { serviceType: service.serviceType, currency: workspace.quote.currency, parameterValues: effectiveConfig.parameterValues, externalCosts: effectiveConfig.externalCosts, finalOverrideMinor, hasOverride, settings: data.settings, pricing: data.pricing };
     const result = runPricingEngine(engineInput);
     const snapshot = createPricingSnapshot(engineInput, result);
     const definition = data.pricing.definitions.find((item) => item.serviceType === service.serviceType);
-    const envelope: ServiceConfigurationEnvelope<ProgrammingConfiguration> = { schemaVersion: 2, serviceType: service.serviceType, data: effectiveConfig };
-    queueService(service, { configurationVersion: 2, configurationJson: JSON.stringify(envelope), calculatedSubtotalMinor: result.calculatedSubtotalMinor, suggestedSubtotalMinor: result.suggestedSubtotalMinor, finalSubtotalMinor: result.finalSubtotalMinor, pricingSnapshotJson: snapshot ? JSON.stringify(snapshot) : null, serviceDefinitionVersion: definition?.version ?? null });
+    const envelope: ServiceConfigurationEnvelope<ProgrammingConfiguration> = { schemaVersion: service.serviceType === "print-design" ? 3 : 2, serviceType: service.serviceType, data: effectiveConfig };
+    queueService(service, { configurationVersion: service.serviceType === "print-design" ? 3 : 2, configurationJson: JSON.stringify(envelope), calculatedSubtotalMinor: result.calculatedSubtotalMinor, suggestedSubtotalMinor: result.suggestedSubtotalMinor, finalSubtotalMinor: result.finalSubtotalMinor, hasOverride, manualSubtotalMinor: finalOverrideMinor, manualReason: hasOverride ? service.manualReason : null, pricingSnapshotJson: snapshot ? JSON.stringify(snapshot) : null, serviceDefinitionVersion: definition?.version ?? null });
   }
 
   function genericEngineChange(service: QuoteService, config: ProductConfiguration | HybridConfiguration, immediate = false) {
@@ -225,7 +235,7 @@ export function App() {
     queueService(service, { configurationJson: JSON.stringify(envelope), calculatedSubtotalMinor: result.calculatedSubtotalMinor, suggestedSubtotalMinor: result.suggestedSubtotalMinor, finalSubtotalMinor: result.finalSubtotalMinor, pricingSnapshotJson: JSON.stringify({ schemaVersion: 1, createdAt: new Date().toISOString(), engineId: engine.id, result }), serviceDefinitionVersion: engine.classificationVersion }, immediate);
   }
 
-  function finalPriceChange(service: QuoteService, finalMinor: number | null, reason: string | null) {
+  function finalPriceChange(service: QuoteService, finalMinor: number | null, reason: string | null, selection?: PrintDesignPriceSelection | null) {
     if (service.serviceType === "video-editing") {
       const config = (JSON.parse(service.configurationJson) as ServiceConfigurationEnvelope<VideoConfiguration>).data;
       videoChange(service, config, finalMinor, reason, true);
@@ -238,6 +248,13 @@ export function App() {
       return;
     }
     const config = (JSON.parse(service.configurationJson) as ServiceConfigurationEnvelope<ProgrammingConfiguration>).data;
+    if (service.serviceType === "print-design") {
+      const parameterValues = { ...config.parameterValues };
+      if (selection && finalMinor != null) parameterValues.priceSelection = { ...selection, amountMinor: finalMinor };
+      else delete parameterValues.priceSelection;
+      programmingChange({ ...service, finalSubtotalMinor: finalMinor, manualSubtotalMinor: finalMinor, manualReason: reason, hasOverride: finalMinor != null }, { ...config, parameterValues });
+      return;
+    }
     programmingChange({ ...service, finalSubtotalMinor: finalMinor, manualSubtotalMinor: finalMinor, manualReason: reason, hasOverride: finalMinor != null }, config);
   }
 
@@ -346,16 +363,21 @@ export function App() {
     const engineInput = {
       serviceType: service.serviceType, currency: currentWorkspace.quote.currency, parameterValues, externalCosts,
       fixedUrgencyMinor: service.serviceType === "video-editing" ? (config as VideoConfiguration).urgencyFeeMinor : undefined,
-      finalOverrideMinor: service.manualSubtotalMinor, hasOverride: service.hasOverride,
+      finalOverrideMinor: service.serviceType === "print-design"
+        ? ((config as ProgrammingConfiguration).parameterValues.priceSelection as PrintDesignPriceSelection | undefined)?.amountMinor ?? null
+        : service.manualSubtotalMinor,
+      hasOverride: service.serviceType === "print-design"
+        ? Boolean((config as ProgrammingConfiguration).parameterValues.priceSelection)
+        : service.hasOverride,
       settings: data.settings, pricing: data.pricing,
     };
     const result = runPricingEngine(engineInput);
     const snapshot = createPricingSnapshot(engineInput, result);
     const definition = data.pricing.definitions.find((item) => item.serviceType === service.serviceType);
     return {
-      id: service.id, title: service.title, configurationVersion: service.configurationVersion,
+      id: service.id, title: service.title, configurationVersion: service.serviceType === "print-design" ? 3 : service.configurationVersion,
       configurationJson: service.serviceType === "print-design"
-        ? JSON.stringify({ schemaVersion: 2, serviceType: service.serviceType, data: config })
+        ? JSON.stringify({ schemaVersion: 3, serviceType: service.serviceType, data: config })
         : service.configurationJson,
       calculatedSubtotalMinor: result.calculatedSubtotalMinor,
       suggestedSubtotalMinor: result.suggestedSubtotalMinor, finalSubtotalMinor: result.finalSubtotalMinor,
