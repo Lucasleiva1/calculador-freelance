@@ -77,3 +77,17 @@ En la misma pantalla se pueden descargar todas las veces que hagan falta:
 - `Guía para IA`
 
 Los archivos empaquetados están en `public/templates/` y se incluyen en la compilación final bajo `dist/templates/`.
+
+## Actualizaciones firmadas por GitHub Releases
+
+Pricing OS usa el updater oficial de Tauri v2 contra este endpoint estable:
+
+```text
+https://github.com/Lucasleiva1/calculador-freelance/releases/latest/download/latest.json
+```
+
+La clave pública está embebida en `src-tauri/tauri.conf.json`. La clave privada y su contraseña se guardan fuera del repositorio, en `%APPDATA%\Pricing OS\updater\`; nunca deben imprimirse, copiarse al workspace, subirse a Git ni adjuntarse a una Release. No regeneres la clave si esos archivos existen: las instalaciones anteriores sólo aceptarán assets firmados por su par original.
+
+Cada Release para Windows debe publicar exactamente el instalador NSIS `.exe`, su `.exe.sig` y `latest.json`. El manifiesto debe incluir `windows-x86_64-nsis` y `windows-x86_64`, apuntando al mismo asset firmado. La primera instalación del NSIS con este updater es manual; desde esa versión en adelante, **Configuración → Actualizaciones** reemplaza la instalación existente y reinicia la aplicación conservando los datos de `%APPDATA%`.
+
+Antes de construir assets firmados, seguí completamente la skill global `tauri-github-release-updater`, alineá la versión en los cinco archivos indicados por esa guía y cargá la clave sólo mediante variables de entorno de la sesión de build.

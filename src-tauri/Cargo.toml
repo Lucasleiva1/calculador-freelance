@@ -1,6 +1,6 @@
 [package]
 name = "pricing-os"
-version = "0.1.0"
+version = "1.0.0"
 description = "Cotizador desktop modular para profesionales creativos"
 authors = ["Pricing OS"]
 edition = "2021"
@@ -15,6 +15,8 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2.7.2"
+tauri-plugin-process = "2.3.1"
+tauri-plugin-updater = "2.10.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "migrate"] }

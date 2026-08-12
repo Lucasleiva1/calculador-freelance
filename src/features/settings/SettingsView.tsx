@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Bot, BrainCircuit, Coins, Database, HelpCircle, Moon, Save, SlidersHorizontal, Sun, UserRound, Workflow } from "lucide-react";
+import { Bot, BrainCircuit, Coins, Database, HelpCircle, Moon, RefreshCw, Save, SlidersHorizontal, Sun, UserRound, Workflow } from "lucide-react";
 import type { AppSettings, Currency, OllamaStatus, PricingConfiguration, SettingsInput } from "../../domain/types";
 import { majorToMinor, minorToInput } from "../../domain/money";
 import { api } from "../../services/api";
@@ -9,19 +9,21 @@ import { ServiceConfigurator } from "./ServiceConfigurator";
 import { MarketSources } from "./MarketSources";
 import { EngineManager } from "./EngineManager";
 import { ProfessionalSettings } from "./ProfessionalSettings";
+import { UpdateSettings } from "./UpdateSettings";
 
-export type SettingsTab = "general" | "profile" | "economy" | "engines" | "rules" | "sources";
+export type SettingsTab = "general" | "profile" | "economy" | "engines" | "rules" | "sources" | "updates";
 
-export function SettingsView({ settings, pricing, initialTab = "general", initialEconomyCurrency, initialEconomyEngineKey, onSave, onPricingChange }: { settings: AppSettings; pricing: PricingConfiguration; initialTab?: SettingsTab; initialEconomyCurrency?: Currency; initialEconomyEngineKey?: string; onSave: (input: SettingsInput) => Promise<void>; onPricingChange: (pricing: PricingConfiguration) => void }) {
+export function SettingsView({ settings, pricing, initialTab = "general", initialEconomyCurrency, initialEconomyEngineKey, onSave, onPricingChange, onBeforeUpdate }: { settings: AppSettings; pricing: PricingConfiguration; initialTab?: SettingsTab; initialEconomyCurrency?: Currency; initialEconomyEngineKey?: string; onSave: (input: SettingsInput) => Promise<void>; onPricingChange: (pricing: PricingConfiguration) => void; onBeforeUpdate: () => Promise<boolean> }) {
   const [tab, setTab] = useState<SettingsTab>(initialTab);
   const apply = async (operation: Promise<PricingConfiguration>) => onPricingChange(await operation);
-  return <div className="view-page settings-page settings-page--wide"><header className="page-header"><div><span className="eyebrow">Preferencias locales</span><h1>Configuración</h1><p>Motores, economía, fuentes y asistencia local en un sistema versionado.</p></div></header><nav className="settings-tabs" aria-label="Secciones de configuración"><button className={tab === "general" ? "is-active" : ""} onClick={() => setTab("general")}><SlidersHorizontal size={16} /> General</button><button className={tab === "profile" ? "is-active" : ""} onClick={() => setTab("profile")}><UserRound size={16} /> Perfil y datos</button><button className={tab === "economy" ? "is-active" : ""} onClick={() => setTab("economy")}><Coins size={16} /> Mi economía</button><button className={tab === "engines" ? "is-active" : ""} onClick={() => setTab("engines")}><Workflow size={16} /> Motores</button><button className={tab === "rules" ? "is-active" : ""} onClick={() => setTab("rules")}><Database size={16} /> Reglas</button><button className={tab === "sources" ? "is-active" : ""} onClick={() => setTab("sources")}><Database size={16} /> Fuentes</button></nav>
+  return <div className="view-page settings-page settings-page--wide"><header className="page-header"><div><span className="eyebrow">Preferencias locales</span><h1>Configuración</h1><p>Motores, economía, fuentes, actualizaciones y asistencia local en un sistema versionado.</p></div></header><nav className="settings-tabs" aria-label="Secciones de configuración"><button className={tab === "general" ? "is-active" : ""} onClick={() => setTab("general")}><SlidersHorizontal size={16} /> General</button><button className={tab === "profile" ? "is-active" : ""} onClick={() => setTab("profile")}><UserRound size={16} /> Perfil y datos</button><button className={tab === "economy" ? "is-active" : ""} onClick={() => setTab("economy")}><Coins size={16} /> Mi economía</button><button className={tab === "engines" ? "is-active" : ""} onClick={() => setTab("engines")}><Workflow size={16} /> Motores</button><button className={tab === "rules" ? "is-active" : ""} onClick={() => setTab("rules")}><Database size={16} /> Reglas</button><button className={tab === "sources" ? "is-active" : ""} onClick={() => setTab("sources")}><Database size={16} /> Fuentes</button><button className={tab === "updates" ? "is-active" : ""} onClick={() => setTab("updates")}><RefreshCw size={16} /> Actualizaciones</button></nav>
     {tab === "general" && <GeneralSettings settings={settings} onSave={onSave} />}
     {tab === "profile" && <ProfessionalSettings />}
     {tab === "economy" && <EconomySettings pricing={pricing} initialCurrency={initialEconomyCurrency} initialEngineKey={initialEconomyEngineKey} onSave={(input) => apply(api.saveEconomicProfile(input))} />}
     {tab === "engines" && <EngineManager pricing={pricing} onPricingChange={onPricingChange} />}
     {tab === "rules" && <ServiceConfigurator pricing={pricing} actions={{ saveDefinition: (input) => apply(api.saveServiceDefinition(input)), saveParameter: (input) => apply(api.saveServiceParameter(input)), deleteParameter: (id) => apply(api.deleteServiceParameter(id)), saveOption: (input) => apply(api.saveParameterOption(input)), deleteOption: (id) => apply(api.deleteParameterOption(id)), saveRule: (input) => apply(api.savePricingRule(input)), deleteRule: (id) => apply(api.deletePricingRule(id)) }} />}
     {tab === "sources" && <MarketSources pricing={pricing} onPricingChange={onPricingChange} />}
+    {tab === "updates" && <UpdateSettings onBeforeInstall={onBeforeUpdate} />}
   </div>;
 }
 
