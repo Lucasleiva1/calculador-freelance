@@ -115,9 +115,10 @@ mod tests {
             .fetch_one(&pool)
             .await
             .expect("automatic sources");
-            // BCRA aporta cambio; ReelRate, SoloPricing, Index.dev y goLance
-            // aportan benchmarks; Remote OK aporta contexto salarial separado.
-            assert_eq!(automatic_sources, 6);
+            // BCRA aporta cambio; ProLatamWork aporta Argentina; ReelRate,
+            // SoloPricing, Index.dev y goLance aportan internacional; Remote OK
+            // conserva el contexto salarial separado.
+            assert_eq!(automatic_sources, 8);
             let automatic_keys: Vec<String> = sqlx::query_scalar(
                 "SELECT system_key FROM market_sources WHERE acquisition_mode='auto_http' AND automation_status='APPROVED' ORDER BY system_key",
             )
@@ -130,6 +131,8 @@ mod tests {
                     "bcra",
                     "golance",
                     "indexdev",
+                    "prolatam-programming-ar",
+                    "prolatam-video-ar",
                     "reelrate",
                     "remoteok",
                     "solopricing"

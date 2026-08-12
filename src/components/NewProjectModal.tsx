@@ -9,7 +9,7 @@ export function NewProjectModal({ clients, onClose, onCreate }: { clients: Clien
   const [clientId, setClientId] = useState(activeClients[0]?.id ?? "");
   const [clientName, setClientName] = useState("");
   const [company, setCompany] = useState("");
-  const [currency, setCurrency] = useState<Currency>("USD");
+  const [currency, setCurrency] = useState<Currency>("ARS");
   const [marketScope, setMarketScope] = useState<MarketScope>("argentina");
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -45,4 +45,3 @@ export function NewProjectModal({ clients, onClose, onCreate }: { clients: Clien
     </form>
   </Modal>;
 }
-

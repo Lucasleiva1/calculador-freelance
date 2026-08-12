@@ -112,10 +112,35 @@ fn is_recent(value: Option<&str>) -> bool {
 fn region_matches(observation: &str, targets: &[String]) -> bool {
     targets.iter().any(|target| {
         target == observation
-            || observation == "GLOBAL"
-            || (target == "INTERNATIONAL" && observation != "AR")
+            || (target == "INTERNATIONAL"
+                && matches!(observation, "GLOBAL" | "INTERNATIONAL"))
             || (target == "LATAM" && matches!(observation, "AR" | "LATAM"))
     })
+}
+
+fn level_matches(observation: &MarketObservation, context: &MarketQueryContext) -> bool {
+    let Some(target) = context.level.as_deref() else {
+        return true;
+    };
+    if target == "custom" {
+        return true;
+    }
+    let Some(level) = observation.experience_level.as_deref() else {
+        return true;
+    };
+    let level = level.to_lowercase();
+    match target {
+        "basic" | "low" => ["junior", "entry", "principiante"]
+            .iter()
+            .any(|value| level.contains(value)),
+        "professional" | "medium" => ["mid", "intermediate", "intermedio"]
+            .iter()
+            .any(|value| level.contains(value)),
+        "advanced" | "high" => ["senior", "expert", "lead"]
+            .iter()
+            .any(|value| level.contains(value)),
+        _ => true,
+    }
 }
 
 fn subtype_matches(observation: &MarketObservation, context: &MarketQueryContext) -> bool {
@@ -169,6 +194,7 @@ pub fn compare_market(
     let mut comparable = Vec::new();
     let mut salary_excluded = 0;
     let mut recent_count = 0;
+    let mut reliable_count = 0;
     for observation in observations {
         if observation.service_type != context.service && observation.service_type != "currency" {
             continue;
@@ -189,6 +215,8 @@ pub fn compare_market(
             Err("La fuente aporta contexto, pero no participa en sugerencias.".into())
         } else if !region_matches(&observation.region, &context.region_targets) {
             Err("La región no coincide con el objetivo de esta cotización.".into())
+        } else if !level_matches(observation, context) {
+            Err("El nivel profesional no coincide con la complejidad elegida.".into())
         } else if !subtype_matches(observation, context) {
             Err("El subservicio no coincide con el alcance concreto de la cotización.".into())
         } else if observation.comparison_eligibility == "ELIGIBLE" {
@@ -203,6 +231,9 @@ pub fn compare_market(
             Ok(value) => {
                 if is_recent(observation_date) {
                     recent_count += 1;
+                }
+                if matches!(observation.confidence.as_str(), "HIGH" | "MEDIUM") {
+                    reliable_count += 1;
                 }
                 comparable.push(ComparableObservation {
                     observation_id: observation.id.clone(),
@@ -260,7 +291,7 @@ pub fn compare_market(
         "HIGH"
     } else if values.len() >= 5 && sources >= 2 {
         "MEDIUM"
-    } else if values.len() >= 3 {
+    } else if values.len() >= 3 || (!values.is_empty() && reliable_count > 0) {
         "LOW"
     } else {
         "INSUFFICIENT"
@@ -437,5 +468,57 @@ mod tests {
             items[0].reason.as_deref(),
             Some("La referencia tiene más de dos años y se conserva sólo como historial.")
         );
+    }
+
+    #[test]
+    fn global_reference_never_counts_as_argentina() {
+        let global = observation("global", "HOURLY", 5_000);
+        let observations = vec![global];
+        let participating = HashSet::from(["source-global".to_string()]);
+        let context = MarketQueryContext {
+            estimated_hours: Some(10.0),
+            ..MarketQueryContext::generic("programming".into(), vec!["AR".into()])
+        };
+        let (items, summary) = compare_market(&observations, &context, "USD", None, &participating);
+        assert_eq!(summary.comparable_count, 0);
+        assert_eq!(
+            items[0].reason.as_deref(),
+            Some("La región no coincide con el objetivo de esta cotización.")
+        );
+    }
+
+    #[test]
+    fn argentina_reference_never_counts_as_international() {
+        let mut argentina = observation("argentina", "HOURLY", 1_000);
+        argentina.region = "AR".into();
+        let observations = vec![argentina];
+        let participating = HashSet::from(["source-argentina".to_string()]);
+        let context = MarketQueryContext {
+            estimated_hours: Some(10.0),
+            ..MarketQueryContext::generic("programming".into(), vec!["INTERNATIONAL".into()])
+        };
+        let (_, summary) = compare_market(&observations, &context, "USD", None, &participating);
+        assert_eq!(summary.comparable_count, 0);
+    }
+
+    #[test]
+    fn complexity_selects_the_matching_experience_band() {
+        let mut junior = observation("junior", "HOURLY", 1_000);
+        junior.experience_level = Some("Junior".into());
+        let mut senior = observation("senior", "HOURLY", 5_000);
+        senior.experience_level = Some("Senior".into());
+        let observations = vec![junior, senior];
+        let participating = observations
+            .iter()
+            .map(|item| item.source_id.clone())
+            .collect();
+        let context = MarketQueryContext {
+            level: Some("basic".into()),
+            estimated_hours: Some(10.0),
+            ..MarketQueryContext::generic("programming".into(), vec!["INTERNATIONAL".into()])
+        };
+        let (_, summary) = compare_market(&observations, &context, "USD", None, &participating);
+        assert_eq!(summary.median_minor, Some(10_000));
+        assert_eq!(summary.confidence_level, "LOW");
     }
 }

@@ -3,6 +3,7 @@ mod commands;
 mod db;
 mod economy_import;
 mod error;
+mod file_exports;
 mod history;
 mod market;
 mod models;
@@ -13,6 +14,7 @@ use tauri::Manager;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let state = tauri::async_runtime::block_on(db::initialize(app.handle()))
                 .map_err(|error| Box::<dyn std::error::Error>::from(error.to_string()))?;
@@ -45,6 +47,7 @@ pub fn run() {
             commands::delete_pricing_rule,
             commands::save_economic_profile,
             economy_import::extract_economy_pdf_text,
+            file_exports::save_economy_template,
             commands::save_market_source,
             commands::delete_market_source,
             commands::restore_market_source,

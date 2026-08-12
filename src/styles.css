@@ -383,6 +383,30 @@ h1, h2, h3 { text-wrap: balance; }
 .segmented button.is-active { border-color: var(--accent); color: var(--accent); }
 .modal__actions { display: flex; justify-content: flex-end; gap: 8px; padding-top: 6px; }
 
+.price-progress-backdrop { position: fixed; z-index: 140; inset: 0; display: grid; place-items: center; padding: 24px; background: color-mix(in srgb, #080706 72%, transparent); backdrop-filter: blur(3px); }
+.price-progress { width: min(560px, 100%); overflow: hidden; border: 1px solid var(--border-strong); border-radius: 7px; background: var(--surface-elevated); box-shadow: 0 28px 80px rgba(0,0,0,.34); }
+.price-progress:focus { outline: none; }
+.price-progress > header { padding: 27px 29px 22px; }
+.price-progress h2 { margin: 7px 0 8px; font-size: 27px; letter-spacing: .025em; text-transform: uppercase; }
+.price-progress header p { margin: 0; color: var(--text-secondary); font-size: 13px; line-height: 1.45; }
+.price-progress__track { height: 3px; overflow: hidden; background: var(--border); }
+.price-progress__track i { display: block; height: 100%; background: var(--accent); box-shadow: 0 0 12px color-mix(in srgb, var(--accent) 70%, transparent); transition: width .42s ease; }
+.price-progress__steps { display: grid; gap: 0; margin: 0; padding: 4px 29px; list-style: none; }
+.price-progress__step { display: grid; grid-template-columns: 25px minmax(0, 1fr) auto; align-items: center; gap: 13px; min-height: 75px; border-bottom: 1px solid var(--border); color: var(--text-muted); }
+.price-progress__step:last-child { border-bottom: 0; }
+.price-progress__step > svg { color: var(--border-strong); }
+.price-progress__step div { display: grid; gap: 4px; }
+.price-progress__step strong { color: var(--text-secondary); font-size: 13px; letter-spacing: .035em; text-transform: uppercase; }
+.price-progress__step span { font-size: 12px; line-height: 1.35; }
+.price-progress__step small { color: var(--text-muted); font-size: 10px; font-weight: 700; letter-spacing: .11em; text-transform: uppercase; }
+.price-progress__step--active > svg, .price-progress__step--active strong { color: var(--accent); }
+.price-progress__step--done > svg { color: var(--accent); }
+.price-progress__step--done strong { color: var(--text); }
+.price-progress__step--warning > svg, .price-progress__step--warning small { color: #b16a18; }
+.price-progress__step--error > svg, .price-progress__step--error strong { color: var(--danger); }
+.price-progress > footer { display: flex; min-height: 61px; align-items: center; justify-content: flex-end; gap: 12px; padding: 11px 29px; border-top: 1px solid var(--border); background: color-mix(in srgb, var(--surface-secondary) 55%, transparent); }
+.price-progress > footer span { display: inline-flex; align-items: center; gap: 7px; color: var(--accent); font-size: 11px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; }
+
 .startup { display: flex; width: 100%; height: 100%; align-items: center; justify-content: center; gap: 20px; background: var(--background); color: var(--text-secondary); letter-spacing: .09em; text-transform: uppercase; }
 .startup--error { flex-direction: column; text-align: center; }
 .startup--error p { max-width: 600px; color: var(--danger); text-transform: none; }
@@ -587,6 +611,30 @@ h1, h2, h3 { text-wrap: balance; }
 .research-state { color: var(--accent); font-size: 9px; }
 
 .market-panel { display: block; }
+.three-prices-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; margin: 18px 0 12px; }
+.three-prices-heading h2 { margin: 3px 0 0; font-size: 18px; line-height: 1.05; text-transform: uppercase; }
+.three-prices-updating { display: inline-flex; align-items: center; gap: 5px; color: var(--accent); font-size: 10px; text-transform: uppercase; }
+.three-price-grid { display: grid; gap: 9px; }
+.price-option-card { position: relative; display: grid; gap: 9px; padding: 14px; overflow: hidden; border: 1px solid var(--border); border-radius: 4px; background: color-mix(in srgb, var(--surface-secondary) 82%, transparent); }
+.price-option-card::before { position: absolute; inset: 0 auto 0 0; width: 3px; background: var(--text-muted); content: ""; }
+.price-option-card--market::before { background: var(--accent); }
+.price-option-card--international::before { background: #78a9ff; }
+.price-option-card > header { display: flex; align-items: center; gap: 9px; }
+.price-option-card > header > span { display: grid; width: 31px; height: 31px; place-items: center; border: 1px solid var(--border-strong); color: var(--accent); }
+.price-option-card > header small { display: block; color: var(--text-muted); font-size: 9px; letter-spacing: .08em; text-transform: uppercase; }
+.price-option-card h3 { margin: 2px 0 0; font-size: 15px; text-transform: uppercase; }
+.price-option-card__value { color: var(--text-primary); font-size: 24px; line-height: 1; }
+.price-option-card--market .price-option-card__value { color: var(--accent); }
+.price-option-card--international .price-option-card__value { color: #9bc0ff; }
+.price-option-card__range { color: var(--text-secondary); font-size: 10px; }
+.price-option-card p { min-height: 0; margin: 0; color: var(--text-muted); font-size: 11px; line-height: 1.4; }
+.price-option-card > footer { display: flex; flex-wrap: wrap; gap: 6px; }
+.price-option-card > footer .button { min-height: 32px; padding: 7px 9px; font-size: 9px; }
+.three-prices-fx { margin: 10px 0 0; color: var(--text-muted); font-size: 10px; line-height: 1.4; }
+.local-price-requirements { display: flex; gap: 9px; margin: 12px 0; padding: 10px; border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--border)); color: var(--text-secondary); background: color-mix(in srgb, var(--accent) 6%, transparent); }
+.local-price-requirements strong { font-size: 11px; text-transform: uppercase; }
+.local-price-requirements ul { margin: 5px 0 0; padding-left: 16px; color: var(--text-muted); font-size: 10px; }
+.three-prices-sources { padding-top: 18px; }
 .market-range { display: flex; flex-direction: column; gap: 5px; margin-top: 15px; padding: 12px 0; border-bottom: 1px solid var(--border); }
 .market-range small, .market-median span, .market-proposal span, .market-confidence span { color: var(--text-muted); font-size: 9px; letter-spacing: .1em; text-transform: uppercase; }
 .market-range strong { font-size: 17px; line-height: 1.25; }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildMarketQueryContext, suggestedFromSnapshot } from "./market";
+import { buildMarketQueryContext, parseThreePriceSnapshot, suggestedFromSnapshot } from "./market";
 import type { MarketSnapshot, QuoteService } from "./types";
 
 const service: QuoteService = {
@@ -34,5 +34,13 @@ describe("market intelligence domain", () => {
 
   it("no inventa sugerencia cuando el mercado es insuficiente", () => {
     expect(suggestedFromSnapshot({ ...snapshot, confidenceLevel: "INSUFFICIENT" }, "premium")).toBeNull();
+  });
+
+  it("lee mercado e internacional como opciones automáticas independientes", () => {
+    const summary = { minimumFilteredMinor: 10_000, p25Minor: 12_000, medianMinor: 15_000, p75Minor: 18_000, maximumFilteredMinor: 20_000, confidenceLevel: "LOW", comparableCount: 1, sourceCount: 1, recentCount: 1, salaryExcludedCount: 0, explanations: [] };
+    const parsed = parseThreePriceSnapshot({ ...snapshot, summaryJson: JSON.stringify({ pricingOptions: { market: { summary, suggestedPriceMinor: 15_000, region: "AR" }, international: { summary, suggestedPriceMinor: 45_000, region: "INTERNATIONAL" } }, fxRateMicros: 14_955_000, fxRateDate: "2026-08-10", fxRateSource: "BCRA" }) });
+    expect(parsed.market?.suggestedPriceMinor).toBe(15_000);
+    expect(parsed.international?.suggestedPriceMinor).toBe(45_000);
+    expect(parsed.fxRateMicros).toBe(14_955_000);
   });
 });

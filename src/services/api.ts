@@ -76,6 +76,7 @@ export const api = {
   deletePricingRule: (id: string) => invoke<PricingConfiguration>("delete_pricing_rule", { id }),
   saveEconomicProfile: (input: EconomicProfileInput) => invoke<PricingConfiguration>("save_economic_profile", { input }),
   extractEconomyPdfText: (dataUrl: string) => invoke<string>("extract_economy_pdf_text", { dataUrl }),
+  saveEconomyTemplate: (kind: "ai-guide" | "json-template") => invoke<string | null>("save_economy_template", { kind }),
   saveMarketSource: (input: MarketSourceInput) => invoke<PricingConfiguration>("save_market_source", { input }),
   deleteMarketSource: (id: string) => invoke<PricingConfiguration>("delete_market_source", { id }),
   restoreMarketSource: (id: string) => invoke<PricingConfiguration>("restore_market_source", { id }),

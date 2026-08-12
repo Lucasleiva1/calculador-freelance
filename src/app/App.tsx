@@ -38,6 +38,7 @@ import { MarketView } from "../features/market/MarketView";
 import { SaveQuoteModal } from "../features/quotes/SaveQuoteModal";
 import { QuotesHistoryView } from "../features/quotes/QuotesHistoryView";
 import { ClientDocumentModal } from "../features/quotes/ClientDocumentModal";
+import { PriceCalculationProgress, type PriceCalculationProgressState } from "../components/PriceCalculationProgress";
 
 function presetConfiguration(config: VideoConfiguration) {
   return JSON.stringify(Object.fromEntries(Object.entries(config).filter(([key]) => !["effortAmount", "effortUnit", "hoursPerDay", "estimatedHours", "externalCosts", "urgencyFeeMinor"].includes(key))));
@@ -62,6 +63,7 @@ export function App() {
   const [documentQuoteId, setDocumentQuoteId] = useState<string | null>(null);
   const [documentAfterSave, setDocumentAfterSave] = useState(false);
   const [calculationBusy, setCalculationBusy] = useState(false);
+  const [priceProgress, setPriceProgress] = useState<PriceCalculationProgressState | null>(null);
   const closeAllowed = useRef(false);
   const marketJobRef = useRef<string | null>(null);
 
@@ -333,12 +335,15 @@ export function App() {
     };
   }
 
-  async function calculateEstimate(automatic = true) {
+  async function calculateEstimate() {
     if (!workspace || !data || calculationBusy) return;
+    setNotice("");
+    setUndoService(null);
+    setPriceProgress({ mode: "calculate", phase: "local", jobId: null, localReady: null, completedSources: 0, totalSources: 0 });
     setCalculationBusy(true);
     try {
       if (!(await autosave.flushAll())) {
-        setNotice("No se pudieron guardar los cambios antes de calcular. Corregí el error indicado y reintentá.");
+        setPriceProgress((current) => current ? { ...current, phase: "error", errorStep: "local", error: "No se pudieron guardar los cambios antes de calcular. Corregí el error indicado y reintentá." } : current);
         return;
       }
       let reloaded = await api.loadWorkspace(workspace.project.id);
@@ -346,24 +351,15 @@ export function App() {
       reloaded = await api.loadWorkspace(workspace.project.id);
       setWorkspace(reloaded);
       const evaluated = evaluateWorkspace(reloaded, data.settings, data.pricing);
-      if (evaluated.totalMinor != null && !evaluated.isPartial) {
-        if (automatic && activeServiceId) {
-          setNotice("Cálculo interno listo. Actualizando las fuentes confiables disponibles…");
-          await startMarketResearchFor(activeServiceId, false, reloaded.project.id);
-        } else {
-          setNotice("Estimado calculado con tus datos manuales. Revisá el total y el desglose.");
-        }
+      if (activeServiceId) {
+        const localReady = evaluated.services.find(({ service }) => service.id === activeServiceId)?.result.calculatedSubtotalMinor != null;
+        setPriceProgress((current) => current ? { ...current, phase: "market", localReady } : current);
+        await startMarketResearchFor(activeServiceId, false, reloaded.project.id);
         return;
       }
-      const activeIssues = evaluated.services.find(({ service }) => service.id === activeServiceId)?.result.issues ?? [];
-      const economyMissing = activeIssues.some((issue) => /configurá tu (economía|tarifa)/i.test(issue));
-      setNotice(economyMissing
-        ? `Para calcular el estimado falta configurar tu tarifa en ${reloaded.quote.currency}.`
-        : activeIssues.length > 0
-          ? `Para calcular el estimado falta: ${activeIssues.join(" ")}`
-          : "Completá los datos pendientes de cada módulo para calcular el estimado.");
+      setPriceProgress((current) => current ? { ...current, phase: "error", errorStep: "local", error: "Elegí un módulo para calcular sus tres precios." } : current);
     } catch (error) {
-      setNotice(`No se pudo actualizar el estimado: ${String(error)}`);
+      setPriceProgress((current) => current ? { ...current, phase: "error", errorStep: "local", error: `No se pudo actualizar el estimado: ${String(error)}` } : current);
     } finally {
       setCalculationBusy(false);
     }
@@ -383,16 +379,37 @@ export function App() {
 
   async function updateMarket(force = false) {
     if (!activeServiceId || !workspace || marketJob?.status === "RUNNING") return;
-    if (!(await autosave.flushAll())) { setNotice("No se pudo guardar el servicio antes de investigar el mercado."); return; }
+    setNotice("");
+    setUndoService(null);
+    const localReady = projectResult?.services.find(({ service }) => service.id === activeServiceId)?.result.calculatedSubtotalMinor != null;
+    setPriceProgress({ mode: "refresh", phase: "market", jobId: null, localReady, completedSources: 0, totalSources: 0 });
+    if (!(await autosave.flushAll())) {
+      setPriceProgress((current) => current ? { ...current, phase: "error", errorStep: "market", error: "No se pudo guardar el servicio antes de actualizar los precios." } : current);
+      return;
+    }
     await startMarketResearchFor(activeServiceId, force, workspace.project.id);
   }
 
   async function startMarketResearchFor(serviceId: string, force: boolean, projectId: string) {
     try {
       const started = await api.startMarketResearch(serviceId, force);
-      marketJobRef.current = started.id; setMarketJob(started); setNotice("");
+      marketJobRef.current = started.id; setMarketJob(started);
+      setPriceProgress((current) => ({
+        ...(current ?? { mode: "refresh" as const, phase: "market" as const, localReady: true }),
+        phase: "market",
+        jobId: started.id,
+        completedSources: started.completed,
+        totalSources: started.total,
+      }));
       void pollMarket(started.id, serviceId, projectId);
-    } catch (error) { setNotice(String(error)); }
+    } catch (error) {
+      setPriceProgress((current) => ({
+        ...(current ?? { mode: "refresh" as const, jobId: null, localReady: true, completedSources: 0, totalSources: 0 }),
+        phase: "error",
+        errorStep: "market",
+        error: String(error),
+      }));
+    }
   }
 
   async function pollMarket(jobId: string, serviceId: string, projectId: string) {
@@ -402,33 +419,41 @@ export function App() {
         const next = await api.getMarketResearchJob(jobId);
         if (marketJobRef.current !== jobId) return;
         setMarketJob(next);
+        setPriceProgress((current) => current?.jobId === jobId ? { ...current, completedSources: next.completed, totalSources: next.total } : current);
         if (next.status !== "RUNNING") {
           marketJobRef.current = null;
           if (next.status === "COMPLETED") {
             const overview = await api.getMarketOverview(serviceId);
-            const success = next.items.filter((item) => item.status === "SUCCESS").length;
-            const cached = next.items.filter((item) => item.status === "CACHED").length;
-            const manual = next.items.filter((item) => item.status === "MANUAL").length;
-            const unavailable = next.items.filter((item) => ["ERROR", "BLOCKED", "NEEDS_CONFIGURATION"].includes(item.status)).length;
             setMarketOverview(overview);
             setMarketOverviewServiceId(serviceId);
             if (next.suggestionUpdateStatus === "APPLIED") {
               const latestWorkspace = await api.loadWorkspace(projectId);
               setWorkspace(latestWorkspace);
             }
-            setNotice(next.error || next.suggestionUpdateMessage || `${success} actualizadas · ${cached} en caché · ${manual} manuales · ${unavailable} no disponibles. La evidencia quedó separada del precio final.`);
             await refresh();
-          } else if (next.status === "ERROR") setNotice(next.error || "La investigación no pudo completarse.");
-          else setNotice("Actualización de mercado cancelada.");
+            setPriceProgress((current) => current?.jobId === jobId ? { ...current, phase: "international", completedSources: next.completed, totalSources: next.total } : current);
+            await new Promise((resolve) => window.setTimeout(resolve, 260));
+            setPriceProgress((current) => current?.jobId === jobId ? { ...current, phase: "complete" } : current);
+            await new Promise((resolve) => window.setTimeout(resolve, 650));
+            setPriceProgress((current) => current?.jobId === jobId ? null : current);
+          } else if (next.status === "ERROR") {
+            setPriceProgress((current) => current?.jobId === jobId ? { ...current, phase: "error", errorStep: "market", error: next.error || "La investigación no pudo completarse." } : current);
+          } else {
+            setPriceProgress((current) => current?.jobId === jobId ? null : current);
+          }
           return;
         }
-      } catch (error) { marketJobRef.current = null; setNotice(String(error)); return; }
+      } catch (error) {
+        marketJobRef.current = null;
+        setPriceProgress((current) => current?.jobId === jobId ? { ...current, phase: "error", errorStep: "market", error: String(error) } : current);
+        return;
+      }
     }
   }
 
   async function cancelMarket() {
     if (!marketJob || marketJob.status !== "RUNNING") return;
-    const cancelled = await api.cancelMarketResearch(marketJob.id); setMarketJob(cancelled);
+    const cancelled = await api.cancelMarketResearch(marketJob.id); setMarketJob(cancelled); setPriceProgress(null);
   }
 
   async function generateClientDocument() {
@@ -491,6 +516,7 @@ export function App() {
     <Sidebar section={section} onSection={(next) => { if (next === "settings") { setSettingsInitialTab("general"); setSettingsInitialCurrency(undefined); } setSection(next); }} onNewProject={() => setNewProjectOpen(true)} />
     <div className="app-body"><Topbar project={activeProject} projects={data.projects} theme={data.settings.theme} usdToArsMicros={data.settings.usdToArsMicros} onProject={openProject} onNewProject={() => setNewProjectOpen(true)} onCurrency={changeCurrency} onToggleTheme={toggleTheme} onSettings={() => { setSettingsInitialTab("general"); setSettingsInitialCurrency(undefined); setSection("settings"); }} />{notice && <div className="notice" role="status"><span>{notice}</span>{undoService && <button onClick={restoreDeletedService}>Deshacer</button>}<button onClick={() => { setNotice(""); setUndoService(null); }}>Cerrar</button></div>}{content}</div>
     {newProjectOpen && <NewProjectModal clients={data.clients} onClose={() => setNewProjectOpen(false)} onCreate={createProject} />}
+    {priceProgress && <PriceCalculationProgress state={priceProgress} onCancel={() => void cancelMarket()} onDismiss={() => setPriceProgress(null)} />}
     {saveQuoteOpen && workspace && projectResult && <SaveQuoteModal workspace={workspace} result={projectResult} onClose={() => { setSaveQuoteOpen(false); setDocumentAfterSave(false); }} onSave={saveQuoteSnapshot} title={documentAfterSave ? "Guardar y preparar presupuesto" : undefined} submitLabel={documentAfterSave ? "Guardar y continuar" : undefined} />}
     {documentQuoteId && workspace && <ClientDocumentModal quoteId={documentQuoteId} services={workspace.services.map((service) => ({ id: service.id, title: service.title }))} onClose={() => setDocumentQuoteId(null)} />}
   </div>;

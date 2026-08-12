@@ -32,6 +32,6 @@ describe("WorkspaceView", () => {
 
     expect(screen.getByText(/Tus parámetros quedan bloqueados/i)).toBeInTheDocument();
     expect(screen.getByLabelText("Tiempo estimado")).toBeDisabled();
-    for (const button of screen.getAllByRole("button", { name: /calcular (?:y actualizar fuentes|automático)/i })) expect(button).toBeDisabled();
+    for (const button of screen.getAllByRole("button", { name: /calcular los 3 precios/i })) expect(button).toBeDisabled();
   });
 });

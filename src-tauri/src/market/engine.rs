@@ -1157,16 +1157,30 @@ async fn run_research_inner(state: &AppState, job_id: &str, force: bool) -> AppR
     } else {
         (None, None, None)
     };
-    let (compared, mut summary) = compare_market(
+    let mut local_context = context.clone();
+    local_context.region_targets = vec!["AR".into()];
+    let mut international_context = context.clone();
+    international_context.region_targets = vec!["INTERNATIONAL".into()];
+    let (local_compared, mut local_summary) = compare_market(
         &observations,
-        &context,
+        &local_context,
+        currency,
+        rate,
+        &participating_source_ids,
+    );
+    let (international_compared, mut international_summary) = compare_market(
+        &observations,
+        &international_context,
         currency,
         rate,
         &participating_source_ids,
     );
     if participating_source_ids.is_empty() {
-        summary.explanations.push(
+        local_summary.explanations.push(
             "No hay fuentes de precio de mercado verificadas para sugerir. Las de moneda, salarios y metodología quedan sólo como contexto.".into(),
+        );
+        international_summary.explanations.push(
+            "No hay fuentes internacionales verificadas para sugerir.".into(),
         );
     }
     let settings =
@@ -1175,14 +1189,23 @@ async fn run_research_inner(state: &AppState, job_id: &str, force: bool) -> AppR
             .await?;
     let suggestions_enabled: bool = settings.try_get("suggestions_enabled")?;
     let strategy: String = settings.try_get("suggestion_strategy")?;
+    // Mercado e internacional son automáticos e independientes del precio
+    // local/sostenible. Nunca se mezclan con la tarifa manual.
     let suggested = suggestions_enabled
-        .then(|| suggested_with_market(calculated, &summary, &strategy))
+        .then(|| suggested_with_market(None, &local_summary, &strategy))
+        .flatten();
+    let international_suggested = suggestions_enabled
+        .then(|| suggested_with_market(None, &international_summary, &strategy))
         .flatten();
     let snapshot_id = Uuid::new_v4().to_string();
     let summary_json = json!({
-        "schemaVersion": 1, "explanations": summary.explanations, "strategy": strategy,
-        "marketSufficient": summary.confidence_level != "INSUFFICIENT",
-        "suggestionExplanation": if suggested.is_some() { "Combina 40% del cálculo interno y 60% de la zona de mercado elegida, sin bajar del cálculo." } else { "Sugerencia sin referencia externa suficiente." },
+        "schemaVersion": 2, "explanations": local_summary.explanations.clone(), "strategy": strategy,
+        "marketSufficient": local_summary.confidence_level != "INSUFFICIENT",
+        "suggestionExplanation": if suggested.is_some() { "Mediana o percentil del mercado argentino comparable, sin mezclar la tarifa manual ni fuentes globales." } else { "Sugerencia argentina sin referencia externa suficiente." },
+        "pricingOptions": {
+            "market": { "summary": local_summary, "suggestedPriceMinor": suggested, "region": "AR" },
+            "international": { "summary": international_summary, "suggestedPriceMinor": international_suggested, "region": "INTERNATIONAL" }
+        },
         "finalPriceProtected": true,
         "fxRateMicros": rate,
         "fxRateDate": rate_date,
@@ -1203,7 +1226,7 @@ async fn run_research_inner(state: &AppState, job_id: &str, force: bool) -> AppR
         if apply_market_suggestion_if_current(&mut tx, &job, market_suggestion, &timestamp).await? {
             (
                 "APPLIED",
-                Some("Se actualizo solo el precio sugerido. El alcance y el precio final no cambiaron.".to_string()),
+                Some("Se actualizó el Precio de mercado Argentina. El precio local, el internacional y el precio final no cambiaron.".to_string()),
             )
         } else {
             (
@@ -1214,27 +1237,44 @@ async fn run_research_inner(state: &AppState, job_id: &str, force: bool) -> AppR
     } else {
         (
             "INSUFFICIENT",
-            Some("No hay referencias comparables suficientes para proponer un precio. Se guardo la evidencia disponible.".to_string()),
+            Some("No hay referencias argentinas suficientes para proponer el precio de mercado. El precio internacional se calculó por separado cuando hubo evidencia.".to_string()),
         )
     };
     sqlx::query("INSERT INTO market_snapshots (id, quote_id, quote_service_id, query_context_json, currency, observation_count, comparable_observation_count, source_count, minimum_filtered_minor, p25_minor, market_median_minor, p75_minor, maximum_filtered_minor, confidence_level, calculated_price_minor, suggested_price_minor, final_price_minor_at_creation, base_service_revision, suggestion_update_status, suggestion_update_message, summary_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
         .bind(&snapshot_id).bind(&quote_id).bind(&job.quote_service_id).bind(serde_json::to_string(&context)?)
-        .bind(&currency).bind(observations.len() as i64).bind(summary.comparable_count).bind(summary.source_count)
-        .bind(summary.minimum_filtered_minor).bind(summary.p25_minor).bind(summary.median_minor).bind(summary.p75_minor).bind(summary.maximum_filtered_minor)
-        .bind(&summary.confidence_level).bind(calculated).bind(suggested).bind(final_price)
+        .bind(&currency).bind(observations.len() as i64).bind(local_summary.comparable_count).bind(local_summary.source_count)
+        .bind(local_summary.minimum_filtered_minor).bind(local_summary.p25_minor).bind(local_summary.median_minor).bind(local_summary.p75_minor).bind(local_summary.maximum_filtered_minor)
+        .bind(&local_summary.confidence_level).bind(calculated).bind(suggested).bind(final_price)
         .bind(job.base_service_revision).bind(suggestion_update_status).bind(&suggestion_update_message)
         .bind(&summary_json).bind(&timestamp)
         .execute(&mut *tx).await?;
-    for item in &compared {
-        let observation = observations
+    for observation in &observations {
+        let local = local_compared
             .iter()
-            .find(|observation| observation.id == item.observation_id)
-            .ok_or_else(|| AppError::Validation("Observación de snapshot inexistente.".into()))?;
+            .find(|item| item.observation_id == observation.id);
+        let international = international_compared
+            .iter()
+            .find(|item| item.observation_id == observation.id);
+        let included_local = local.is_some_and(|item| item.included);
+        let included_international = international.is_some_and(|item| item.included);
+        let included = included_local || included_international;
+        let normalized = local
+            .and_then(|item| item.normalized_value_minor)
+            .or_else(|| international.and_then(|item| item.normalized_value_minor));
+        let reason = if included_local {
+            Some("Incluida en Precio de mercado Argentina".to_string())
+        } else if included_international {
+            Some("Incluida en Precio internacional".to_string())
+        } else {
+            local
+                .and_then(|item| item.reason.clone())
+                .or_else(|| international.and_then(|item| item.reason.clone()))
+        };
         let cross_currency = observation.currency != currency.as_str();
         let converted = converted_midpoint(observation, currency, rate);
         sqlx::query("INSERT INTO market_snapshot_observations (snapshot_id, observation_id, included, exclusion_reason, normalized_value_minor, converted_value_minor, converted_currency, exchange_rate_micros, exchange_rate_date, exchange_rate_source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-            .bind(&snapshot_id).bind(&item.observation_id).bind(item.included).bind(&item.reason)
-            .bind(item.normalized_value_minor).bind(cross_currency.then_some(converted).flatten())
+            .bind(&snapshot_id).bind(&observation.id).bind(included).bind(&reason)
+            .bind(normalized).bind(cross_currency.then_some(converted).flatten())
             .bind(cross_currency.then_some(currency.as_str())).bind(cross_currency.then_some(rate).flatten())
             .bind(cross_currency.then_some(rate_date.as_deref()).flatten())
             .bind(cross_currency.then_some(rate_source.as_deref()).flatten())
@@ -1491,6 +1531,8 @@ mod tests {
                     ("bcra".into(), false),
                     ("golance".into(), true),
                     ("indexdev".into(), true),
+                    ("prolatam-programming-ar".into(), true),
+                    ("prolatam-video-ar".into(), true),
                     ("reelrate".into(), true),
                     ("remoteok".into(), false),
                     ("solopricing".into(), true),

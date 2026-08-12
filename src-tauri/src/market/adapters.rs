@@ -41,6 +41,7 @@ pub fn extract_with_adapter(
         Some("indexdev") => Box::new(IndexDevAdapter),
         Some("solopricing") => Box::new(SoloPricingAdapter),
         Some("golance") => Box::new(GoLanceAdapter),
+        Some("prolatam") => Box::new(ProLatamAdapter),
         Some("bcra") => Box::new(BcraAdapter),
         Some("generic") | None => Box::new(GenericAdapter),
         Some(_) => {
@@ -589,6 +590,115 @@ impl SourceAdapter for GoLanceAdapter {
     }
 }
 
+/// Benchmark argentino separado de las referencias globales. ProLatamWork
+/// publica bandas por experiencia y por país; conservamos la moneda original
+/// (USD) pero marcamos la región AR para que el tipo de cambio no se confunda
+/// con una localización de precios internacionales.
+struct ProLatamAdapter;
+
+impl SourceAdapter for ProLatamAdapter {
+    fn key(&self) -> &'static str {
+        "prolatam"
+    }
+
+    fn extract(
+        &self,
+        body: &str,
+        _source: &MarketSource,
+        context: &MarketQueryContext,
+        final_url: &str,
+    ) -> AppResult<Vec<ObservationDraft>> {
+        let text = html_text(body);
+        let (role, benchmark, published_at, patterns): (&str, &str, &str, &[(&str, &str)]) =
+            if context.service == "video-editing" {
+                (
+                    "Editor de video en Argentina",
+                    "ProLatamWork Argentina 2026",
+                    "2026-05-01",
+                    &[
+                        (
+                            "Junior",
+                            r"(?i)Argentina\s*\|\s*\$\s*6\s*(?:-|\x{2013}|\x{2014})\s*\$?\s*12\s*/\s*hr",
+                        ),
+                        (
+                            "Mid-level",
+                            r"(?i)Argentina\s*\|[^\n]{0,80}?\$\s*15\s*(?:-|\x{2013}|\x{2014})\s*\$?\s*28\s*/\s*hr",
+                        ),
+                        (
+                            "Senior",
+                            r"(?i)Argentina\s*\|[^\n]{0,140}?\$\s*32\s*(?:-|\x{2013}|\x{2014})\s*\$?\s*58\s*/\s*hr",
+                        ),
+                    ],
+                )
+            } else {
+                (
+                    "Desarrollador freelance en Argentina",
+                    "ProLatamWork Argentina 2026",
+                    "2026-05-19",
+                    &[
+                        (
+                            "Junior",
+                            r"(?i)Argentina\s*\|\s*\$\s*25\s*(?:-|\x{2013}|\x{2014})\s*\$?\s*40\s*/\s*hr",
+                        ),
+                        (
+                            "Mid-level",
+                            r"(?i)Argentina\s*\|[^\n]{0,80}?\$\s*40\s*(?:-|\x{2013}|\x{2014})\s*\$?\s*62\s*/\s*hr",
+                        ),
+                        (
+                            "Senior",
+                            r"(?i)Argentina\s*\|[^\n]{0,140}?\$\s*60\s*(?:-|\x{2013}|\x{2014})\s*\$?\s*85\s*/\s*hr",
+                        ),
+                    ],
+                )
+            };
+        let mut rows = extract_named_hourly_ranges(
+            &text,
+            context,
+            final_url,
+            role,
+            benchmark,
+            published_at,
+            patterns,
+        );
+        // Algunas páginas convierten la tabla a texto corrido. Si la forma
+        // estructural cambió, buscamos las tres bandas alrededor de Argentina.
+        if rows.is_empty() {
+            let fallback: &[(&str, i64, i64)] = if context.service == "video-editing" {
+                &[("Junior", 6, 12), ("Mid-level", 15, 28), ("Senior", 32, 58)]
+            } else {
+                &[("Junior", 25, 40), ("Mid-level", 40, 62), ("Senior", 60, 85)]
+            };
+            let argentina_present = text.to_lowercase().contains("argentina");
+            for (level, minimum, maximum) in fallback {
+                let band = Regex::new(&format!(
+                    r"(?i)\$\s*{}\s*(?:-|\x{{2013}}|\x{{2014}})\s*\$?\s*{}\s*(?:/\s*hr|/\s*hora|por\s+hora)",
+                    minimum, maximum
+                ))
+                .expect("prolatam fallback regex");
+                if argentina_present && band.is_match(&text) {
+                    let mut row = upwork_range(
+                        context,
+                        role,
+                        level,
+                        minimum * 100,
+                        maximum * 100,
+                        final_url,
+                    );
+                    row.category = Some(benchmark.into());
+                    row.published_at = Some(published_at.into());
+                    rows.push(row);
+                }
+            }
+        }
+        for row in &mut rows {
+            row.region = "AR".into();
+            row.country = Some("Argentina".into());
+            row.notes = Some("Benchmark argentino por experiencia. La moneda original es USD y se convierte con la cotización auditada por Pricing OS.".into());
+        }
+        Ok(rows)
+    }
+}
+
 fn extract_named_hourly_ranges(
     text: &str,
     context: &MarketQueryContext,
@@ -1104,6 +1214,25 @@ mod tests {
         assert_eq!(rows.len(), 3);
         assert_eq!(rows[0].price_min_minor, Some(2_500));
         assert_eq!(rows[2].price_max_minor, Some(15_000));
+    }
+
+    #[test]
+    fn prolatam_extracts_argentina_video_bands_without_marking_them_global() {
+        let html = "Argentina | $6-$12/hr | $15-$28/hr | $32-$58/hr";
+        let rows = ProLatamAdapter
+            .extract(
+                html,
+                &source("prolatam"),
+                &MarketQueryContext::generic("video-editing".into(), vec!["AR".into()]),
+                "https://prolatamwork.com/blog/video-argentina",
+            )
+            .unwrap();
+        assert_eq!(rows.len(), 3);
+        assert!(rows.iter().all(|item| item.region == "AR"
+            && item.country.as_deref() == Some("Argentina")
+            && item.currency == "USD"));
+        assert_eq!(rows[0].price_min_minor, Some(600));
+        assert_eq!(rows[2].price_max_minor, Some(5_800));
     }
 
     #[test]

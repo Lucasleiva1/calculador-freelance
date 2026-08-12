@@ -1,5 +1,55 @@
 import type { Currency, MarketObservation, MarketSnapshot, QuoteService, SuggestionStrategy } from "./types";
 
+export interface AutomaticPriceSummary {
+  minimumFilteredMinor: number | null;
+  p25Minor: number | null;
+  medianMinor: number | null;
+  p75Minor: number | null;
+  maximumFilteredMinor: number | null;
+  confidenceLevel: "HIGH" | "MEDIUM" | "LOW" | "INSUFFICIENT";
+  comparableCount: number;
+  sourceCount: number;
+  recentCount: number;
+  salaryExcludedCount: number;
+  explanations: string[];
+}
+
+export interface AutomaticPriceOption {
+  summary: AutomaticPriceSummary;
+  suggestedPriceMinor: number | null;
+  region: "AR" | "INTERNATIONAL";
+}
+
+export interface ThreePriceSnapshot {
+  market: AutomaticPriceOption | null;
+  international: AutomaticPriceOption | null;
+  fxRateMicros: number | null;
+  fxRateDate: string | null;
+  fxRateSource: string | null;
+}
+
+export function parseThreePriceSnapshot(snapshot: MarketSnapshot | null): ThreePriceSnapshot {
+  const empty = { market: null, international: null, fxRateMicros: null, fxRateDate: null, fxRateSource: null };
+  if (!snapshot) return empty;
+  try {
+    const value = JSON.parse(snapshot.summaryJson) as {
+      pricingOptions?: { market?: AutomaticPriceOption; international?: AutomaticPriceOption };
+      fxRateMicros?: number | null;
+      fxRateDate?: string | null;
+      fxRateSource?: string | null;
+    };
+    return {
+      market: value.pricingOptions?.market ?? null,
+      international: value.pricingOptions?.international ?? null,
+      fxRateMicros: value.fxRateMicros ?? null,
+      fxRateDate: value.fxRateDate ?? null,
+      fxRateSource: value.fxRateSource ?? null,
+    };
+  } catch {
+    return empty;
+  }
+}
+
 export interface MarketQueryContext {
   service: string;
   subtype: string | null;

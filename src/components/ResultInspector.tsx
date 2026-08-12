@@ -1,80 +1,221 @@
 import { useState } from "react";
-import { ArrowUpRight, BarChart3, ChevronDown, CircleAlert, CircleCheck, Clock3, LineChart, RefreshCw, Settings2, XCircle } from "lucide-react";
-import type { Currency, MarketObservation, MarketOverview, MarketResearchJob, MarketSuggestionUpdateStatus } from "../domain/types";
+import {
+  ArrowLeftRight,
+  ArrowUpRight,
+  BarChart3,
+  ChevronDown,
+  CircleAlert,
+  Clock3,
+  Globe2,
+  MapPin,
+  RefreshCw,
+  Settings2,
+  ShieldCheck,
+  XCircle,
+} from "lucide-react";
+import type { Currency, MarketObservation, MarketOverview, MarketResearchJob } from "../domain/types";
 import type { ProjectResult } from "../domain/quote";
-import { formatMoney, majorToMinor, minorToInput } from "../domain/money";
+import { parseThreePriceSnapshot, type AutomaticPriceOption } from "../domain/market";
+import { convertMinor, formatMoney, formatRate, majorToMinor, minorToInput } from "../domain/money";
 import { api } from "../services/api";
 import { Button, Field, Input, Modal } from "./ui";
 
-export function ResultInspector({ result, currency, activeServiceId, suggestionsEnabled, market, marketJob, onUpdateMarket, onCancelMarket, onConfigureEconomy, onFinalPriceChange }: { result: ProjectResult; currency: Currency; activeServiceId: string | null; suggestionsEnabled: boolean; market: MarketOverview | null; marketJob: MarketResearchJob | null; onUpdateMarket: (force?: boolean) => Promise<void>; onCancelMarket: () => Promise<void>; onConfigureEconomy?: () => void; onFinalPriceChange?: (finalMinor: number | null, reason: string | null) => void }) {
+interface ResultInspectorProps {
+  result: ProjectResult;
+  currency: Currency;
+  activeServiceId: string | null;
+  suggestionsEnabled: boolean;
+  usdToArsMicros?: number | null;
+  market: MarketOverview | null;
+  marketJob: MarketResearchJob | null;
+  onUpdateMarket: (force?: boolean) => Promise<void>;
+  onCancelMarket: () => Promise<void>;
+  onConfigureEconomy?: () => void;
+  onFinalPriceChange?: (finalMinor: number | null, reason: string | null) => void;
+}
+
+export function ResultInspector({
+  result,
+  currency,
+  activeServiceId,
+  usdToArsMicros = null,
+  market,
+  marketJob,
+  onUpdateMarket,
+  onCancelMarket,
+  onConfigureEconomy,
+  onFinalPriceChange,
+}: ResultInspectorProps) {
   const active = result.services.find(({ service }) => service.id === activeServiceId);
-  const activeIsReady = active?.result.status === "ready" && active.result.finalSubtotalMinor != null;
-  const requiresEconomy = active?.result.issues.some((issue) => /Configurá tu (tarifa|economía)/u.test(issue)) ?? false;
   const marketUpdating = marketJob?.status === "RUNNING";
+  const snapshot = market?.latestSnapshot ?? null;
+  const automatic = parseThreePriceSnapshot(snapshot);
+  const fxRate = automatic.fxRateMicros ?? usdToArsMicros;
+  const snapshotCurrency = snapshot?.currency ?? currency;
+  const localPrice = active?.result.calculatedSubtotalMinor ?? null;
+  const marketPrice = optionValue(automatic.market, snapshotCurrency, currency, fxRate);
+  const [internationalCurrency, setInternationalCurrency] = useState<Currency>(currency);
+  const internationalPrice = optionValue(automatic.international, snapshotCurrency, internationalCurrency, fxRate);
   const [breakdownOpen, setBreakdownOpen] = useState(false);
   const [overrideOpen, setOverrideOpen] = useState(Boolean(active?.result.hasOverride));
   const [finalInput, setFinalInput] = useState(() => minorToInput(active?.result.finalSubtotalMinor ?? null));
   const [reason, setReason] = useState(active?.service.manualReason ?? "");
   const [sourcesOpen, setSourcesOpen] = useState(false);
-  const [explanationOpen, setExplanationOpen] = useState(false);
-  return <aside id="resultado-estimado" className="inspector" tabIndex={-1} aria-label="Resultado del estimado"><section className="inspector__primary"><span className="eyebrow">Resultado</span><div className="hero-price"><small>{result.isPartial ? "Subtotal parcial" : "Total del proyecto"}</small><strong>{formatMoney(result.totalMinor, currency)}</strong></div>{result.services.length === 0 && <p className="inspector__message">Agregá un servicio para comenzar la cotización.</p>}{result.unpricedCount > 0 && <p className="inspector__message">{result.unpricedCount} {result.unpricedCount === 1 ? "servicio pendiente de precio" : "servicios pendientes de precio"}.</p>}
-    {active && <>{!activeIsReady && <section className="estimate-requirements" role="status"><div className="estimate-requirements__heading"><CircleAlert size={19} aria-hidden="true" /><div><strong>Faltan requisitos para calcular</strong><span>El estimado aparecerá cuando estos datos estén completos.</span></div></div><ul>{active.result.issues.length > 0 ? active.result.issues.map((issue) => <li key={issue}>{issue}</li>) : <li>Completá los datos del módulo para obtener un estimado.</li>}</ul>{requiresEconomy && onConfigureEconomy && <Button type="button" variant="ghost" onClick={onConfigureEconomy}><Settings2 size={15} /> Configurar tarifa</Button>}</section>}{activeIsReady && <p className="estimate-confirmation"><CircleCheck size={17} aria-hidden="true" /> Estimado actualizado con los parámetros de este módulo.</p>}<div className="pricing-stack"><div className="price-row"><span>{active.result.engineKind === "product" || active.result.engineKind === "hybrid" ? "Piso sostenible" : "Calculado"}</span><strong>{formatMoney(active.result.calculatedSubtotalMinor, currency)}</strong></div>{suggestionsEnabled && <div className="price-row price-row--suggested"><span>{active.result.engineKind === "product" || active.result.engineKind === "hybrid" ? "Recomendado" : "Sugerido"}</span><strong>{formatMoney(active.result.suggestedSubtotalMinor, currency)}</strong></div>}{active.result.pricingTiers && <div className="price-row"><span>Premium</span><strong>{formatMoney(active.result.pricingTiers.premium.totalMinor, currency)}</strong></div>}<div className="price-row price-row--final"><span>Precio final</span><strong>{formatMoney(active.result.finalSubtotalMinor, currency)}</strong></div>{active.result.productMetrics && <div className="product-inspector-metrics"><div><span>Costo unitario</span><b>{formatMoney(active.result.productMetrics.costUnitMinor, currency)}</b></div><div><span>Costo de producción</span><b>{formatMoney(active.result.productMetrics.productionCostMinor, currency)}</b></div><div><span>Ganancia estimada</span><b>{formatMoney(active.result.productMetrics.grossProfitMinor, currency)}</b></div><div><span>Margen / markup</span><b>{(active.result.productMetrics.marginMicros / 10_000).toLocaleString("es-AR")}% / {(active.result.productMetrics.markupMicros / 10_000).toLocaleString("es-AR")}%</b></div></div>}
-      <label className="override-toggle"><input type="checkbox" checked={overrideOpen} disabled={marketUpdating} onChange={(e) => { setOverrideOpen(e.target.checked); if (!e.target.checked) onFinalPriceChange?.(null, null); }} /> Definir precio final manual</label>{overrideOpen && <div className="override-box"><Field label={`Precio final · ${currency}`}><Input type="number" min="0" step="0.01" value={finalInput} disabled={marketUpdating} onChange={(e) => setFinalInput(e.target.value)} /></Field><Field label="Motivo · opcional"><Input disabled={marketUpdating} value={reason} onChange={(e) => setReason(e.target.value)} /></Field><Button variant="accent" disabled={marketUpdating} onClick={() => onFinalPriceChange?.(majorToMinor(finalInput), reason || null)}>Aplicar precio final</Button></div>}
-      <button type="button" className={`breakdown-toggle ${breakdownOpen ? "is-open" : ""}`} aria-expanded={breakdownOpen} onClick={() => setBreakdownOpen(!breakdownOpen)}>Ver desglose <ChevronDown size={16} aria-hidden="true" /></button>{breakdownOpen && <div className="breakdown">{active.result.lines.length === 0 ? <p>El servicio todavía no tiene líneas calculables.</p> : active.result.lines.map((line, index) => <div key={`${line.id ?? line.label}-${index}`}><span>{line.label}<small>{line.detail}</small></span><strong>{line.amountMinor >= 0 ? "+" : "−"}{formatMoney(Math.abs(line.amountMinor), currency)}</strong></div>)}</div>}
-    </div></>}
-    <div className="metric"><Clock3 size={19} /><span>Horas estimadas</span><strong>{result.totalHours > 0 ? `${result.totalHours.toLocaleString("es-AR")} h` : "—"}</strong></div><div className="metric"><BarChart3 size={19} /><span>Valor efectivo / h</span><strong>{formatMoney(result.effectiveHourlyMinor, currency)}</strong></div></section><MarketPanel active={Boolean(active)} currency={currency} market={market} job={marketJob} onUpdate={onUpdateMarket} onCancel={onCancelMarket} onSources={() => setSourcesOpen(true)} onExplain={() => setExplanationOpen(true)} onApplyProposal={onFinalPriceChange ? (value) => { setOverrideOpen(true); setFinalInput(minorToInput(value)); setReason("Propuesta de mercado actualizada"); onFinalPriceChange(value, "Propuesta de mercado actualizada"); } : undefined} />
-    {sourcesOpen && <MarketEvidenceModal market={market} currency={currency} onClose={() => setSourcesOpen(false)} />}
-    {explanationOpen && <SuggestionExplanationModal market={market} currency={currency} onClose={() => setExplanationOpen(false)} />}
+
+  function choosePrice(value: number | null, sourceCurrency: Currency, label: string) {
+    if (value == null || !onFinalPriceChange) return;
+    const finalValue = convertMinor(value, sourceCurrency, currency, fxRate);
+    if (finalValue == null) return;
+    const nextReason = `Elegido desde ${label}`;
+    setOverrideOpen(true);
+    setFinalInput(minorToInput(finalValue));
+    setReason(nextReason);
+    onFinalPriceChange(finalValue, nextReason);
+  }
+
+  return <aside id="resultado-estimado" className="inspector" tabIndex={-1} aria-label="Resultado del estimado">
+    <section className="inspector__primary">
+      <span className="eyebrow">Precio final elegido</span>
+      <div className="hero-price">
+        <small>{result.isPartial ? "Subtotal parcial" : "Total del proyecto"}</small>
+        <strong>{formatMoney(result.totalMinor, currency)}</strong>
+      </div>
+      {result.services.length === 0 && <p className="inspector__message">Agregá un servicio para comenzar la cotización.</p>}
+
+      {active && <>
+        <header className="three-prices-heading">
+          <div><span className="eyebrow">Tres referencias independientes</span><h2>Elegí según el cliente</h2></div>
+          {marketUpdating && <span className="three-prices-updating"><RefreshCw className="spin" size={14} /> Actualizando</span>}
+        </header>
+        <div className="three-price-grid">
+          <PriceCard
+            icon={<ShieldCheck size={19} />}
+            tone="local"
+            title="Local / sostenible"
+            eyebrow="Tus parámetros manuales"
+            value={localPrice}
+            currency={currency}
+            description={localPrice == null ? "Completá tu economía o tarifa. Los otros dos precios siguen funcionando." : "Tu base local calculada sólo con los datos que cargaste."}
+            onChoose={localPrice != null && onFinalPriceChange ? () => choosePrice(localPrice, currency, "Precio local / sostenible") : undefined}
+            action={localPrice == null && onConfigureEconomy ? <Button type="button" variant="ghost" onClick={onConfigureEconomy}><Settings2 size={14} /> Completar datos</Button> : undefined}
+          />
+          <PriceCard
+            icon={<MapPin size={19} />}
+            tone="market"
+            title="Mercado"
+            eyebrow="Argentina · automático"
+            value={marketPrice}
+            currency={currency}
+            description={automatic.market ? optionDescription(automatic.market) : "Todavía no hay datos argentinos separados. Actualizá las fuentes."}
+            range={optionRange(automatic.market, snapshotCurrency, currency, fxRate)}
+            onChoose={marketPrice != null && onFinalPriceChange ? () => choosePrice(marketPrice, currency, "Precio de mercado Argentina") : undefined}
+          />
+          <PriceCard
+            icon={<Globe2 size={19} />}
+            tone="international"
+            title="Internacional"
+            eyebrow={`Automático · mostrado en ${internationalCurrency}`}
+            value={internationalPrice}
+            currency={internationalCurrency}
+            description={automatic.international ? optionDescription(automatic.international) : "Todavía no hay una referencia internacional separada."}
+            range={optionRange(automatic.international, snapshotCurrency, internationalCurrency, fxRate)}
+            onChoose={internationalPrice != null && onFinalPriceChange ? () => choosePrice(internationalPrice, internationalCurrency, "Precio internacional") : undefined}
+            action={<Button type="button" variant="ghost" disabled={!fxRate} onClick={() => setInternationalCurrency((current) => current === "ARS" ? "USD" : "ARS")}><ArrowLeftRight size={14} /> Ver en {internationalCurrency === "ARS" ? "USD" : "ARS"}</Button>}
+          />
+        </div>
+
+        {automatic.fxRateMicros && <p className="three-prices-fx">Conversión: USD 1 = ARS {formatRate(automatic.fxRateMicros)} · {automatic.fxRateDate ?? "fecha no informada"} · {shortSource(automatic.fxRateSource)}</p>}
+
+        {active.result.issues.length > 0 && localPrice == null && <section className="local-price-requirements" role="status">
+          <CircleAlert size={17} /><div><strong>El precio local está pendiente</strong><ul>{active.result.issues.map((issue) => <li key={issue}>{issue}</li>)}</ul></div>
+        </section>}
+
+        <label className="override-toggle"><input type="checkbox" checked={overrideOpen} disabled={marketUpdating} onChange={(event) => { setOverrideOpen(event.target.checked); if (!event.target.checked) onFinalPriceChange?.(null, null); }} /> Ajustar el precio final</label>
+        {overrideOpen && <div className="override-box"><Field label={`Precio final · ${currency}`}><Input type="number" min="0" step="0.01" value={finalInput} disabled={marketUpdating} onChange={(event) => setFinalInput(event.target.value)} /></Field><Field label="Motivo · opcional"><Input disabled={marketUpdating} value={reason} onChange={(event) => setReason(event.target.value)} /></Field><Button variant="accent" disabled={marketUpdating} onClick={() => onFinalPriceChange?.(majorToMinor(finalInput), reason || null)}>Aplicar precio final</Button></div>}
+
+        <button type="button" className={`breakdown-toggle ${breakdownOpen ? "is-open" : ""}`} aria-expanded={breakdownOpen} onClick={() => setBreakdownOpen(!breakdownOpen)}>Ver desglose local <ChevronDown size={16} aria-hidden="true" /></button>
+        {breakdownOpen && <div className="breakdown">{active.result.lines.length === 0 ? <p>El precio local todavía no tiene líneas calculables.</p> : active.result.lines.map((line, index) => <div key={`${line.id ?? line.label}-${index}`}><span>{line.label}<small>{line.detail}</small></span><strong>{line.amountMinor >= 0 ? "+" : "−"}{formatMoney(Math.abs(line.amountMinor), currency)}</strong></div>)}</div>}
+      </>}
+
+      <div className="metric"><Clock3 size={19} /><span>Horas estimadas</span><strong>{result.totalHours > 0 ? `${result.totalHours.toLocaleString("es-AR")} h` : "—"}</strong></div>
+      <div className="metric"><BarChart3 size={19} /><span>Valor final efectivo / h</span><strong>{formatMoney(result.effectiveHourlyMinor, currency)}</strong></div>
+    </section>
+
+    <section className="market-panel three-prices-sources">
+      <span className="eyebrow">Fuentes automáticas</span>
+      {marketUpdating && marketJob ? <div className="inspector-research"><div><RefreshCw className="spin" size={17} /><strong>Actualizando mercado e internacional</strong><span>{marketJob.completed} / {marketJob.total} fuentes</span></div>{marketJob.items.map((item) => <p key={item.sourceId}><span>{item.sourceName}</span><b>{item.status}</b></p>)}<Button variant="danger" onClick={onCancelMarket}><XCircle size={15} /> Cancelar</Button></div>
+        : <>{marketJob?.error && <p className="market-offline">{marketJob.error}</p>}<p>{snapshot ? `Última verificación: ${relative(snapshot.createdAt)}.` : "Todavía no hay datos automáticos."}</p><div className="market-panel__actions"><Button disabled={!active} onClick={() => onUpdateMarket(false)}><RefreshCw size={15} /> Actualizar precios</Button><Button disabled={!market?.observations.length} onClick={() => setSourcesOpen(true)}>Ver fuentes</Button><button className="text-action" onClick={() => { if (window.confirm("¿Forzar una actualización ignorando la caché vigente?")) void onUpdateMarket(true); }}>Forzar actualización</button></div></>}
+    </section>
+    {sourcesOpen && <MarketEvidenceModal market={market} onClose={() => setSourcesOpen(false)} />}
   </aside>;
 }
 
-function MarketPanel({ active, currency, market, job, onUpdate, onCancel, onSources, onExplain, onApplyProposal }: { active: boolean; currency: Currency; market: MarketOverview | null; job: MarketResearchJob | null; onUpdate: (force?: boolean) => Promise<void>; onCancel: () => Promise<void>; onSources: () => void; onExplain: () => void; onApplyProposal?: (value: number) => void }) {
-  const snapshot = market?.latestSnapshot;
-  const running = job?.status === "RUNNING";
-  return <section className="market-panel"><span className="eyebrow">Referencia de mercado</span>
-    {running && job ? <div className="inspector-research"><div><RefreshCw className="spin" size={17} /><strong>Actualizando mercado</strong><span>{job.completed} / {job.total} fuentes</span></div>{job.items.map((item) => <p key={item.sourceId}><span>{item.sourceName}</span><b>{item.status}</b></p>)}<Button variant="danger" onClick={onCancel}><XCircle size={15} /> Cancelar</Button></div>
-      : snapshot ? <>{job?.error && <p className="market-offline">{job.error}</p>}<div className="market-range"><small>Rango comparable</small><strong>{snapshot.minimumFilteredMinor == null ? "Datos insuficientes" : `${formatMoney(snapshot.minimumFilteredMinor, currency)} — ${formatMoney(snapshot.maximumFilteredMinor, currency)}`}</strong></div><div className="market-median"><span>Mediana</span><b>{formatMoney(snapshot.marketMedianMinor, currency)}</b></div><MarketProposal snapshot={snapshot} currency={currency} onApply={onApplyProposal} /><div className="market-confidence"><span>Confianza</span><b>{snapshot.confidenceLevel.toLocaleLowerCase("es-AR")}</b><small>{snapshot.comparableObservationCount} observaciones · {snapshot.sourceCount} fuentes</small></div><p className="market-updated">Actualizado {relative(snapshot.createdAt)}</p><div className="market-panel__actions"><Button onClick={onSources}>Ver fuentes</Button><Button onClick={() => onUpdate(false)}><RefreshCw size={15} /> Actualizar</Button><button className="text-action" onClick={onExplain}>¿Por qué esta propuesta?</button><button className="text-action" onClick={() => { if (window.confirm("¿Forzar una actualización ignorando el cooldown de las fuentes?")) void onUpdate(true); }}>Forzar actualización</button></div></>
-      : <div className="market-empty-state"><LineChart size={24} /><strong>Todavía no hay datos</strong><p>La investigación sólo comienza cuando vos la pedís.</p><Button variant="accent" disabled={!active} onClick={() => onUpdate(false)}>Actualizar mercado</Button></div>}
-  </section>;
+function PriceCard({ icon, tone, title, eyebrow, value, currency, description, range, onChoose, action }: {
+  icon: React.ReactNode;
+  tone: "local" | "market" | "international";
+  title: string;
+  eyebrow: string;
+  value: number | null;
+  currency: Currency;
+  description: string;
+  range?: string | null;
+  onChoose?: () => void;
+  action?: React.ReactNode;
+}) {
+  return <article className={`price-option-card price-option-card--${tone}`}>
+    <header><span>{icon}</span><div><small>{eyebrow}</small><h3>{title}</h3></div></header>
+    <strong className="price-option-card__value">{formatMoney(value, currency)}</strong>
+    {range && <span className="price-option-card__range">Rango: {range}</span>}
+    <p>{description}</p>
+    <footer>{onChoose && <Button type="button" variant="accent" onClick={onChoose}>Usar este precio</Button>}{action}</footer>
+  </article>;
 }
 
-function MarketProposal({ snapshot, currency, onApply }: { snapshot: NonNullable<MarketOverview["latestSnapshot"]>; currency: Currency; onApply?: (value: number) => void }) {
-  const hasProposal = snapshot.suggestedPriceMinor != null;
-  return <section className={`market-proposal market-proposal--${snapshot.suggestionUpdateStatus.toLowerCase()}`} aria-label="Propuesta de mercado"><div><span>Propuesta de mercado</span><b>{hasProposal ? formatMoney(snapshot.suggestedPriceMinor, currency) : "Sin propuesta"}</b></div><small>{marketSuggestionStatusLabel(snapshot.suggestionUpdateStatus)} · {marketSuggestionMessage(snapshot)}</small><p>La propuesta no cambia tu precio sin permiso.</p>{hasProposal && onApply && <Button type="button" variant="accent" onClick={() => onApply(snapshot.suggestedPriceMinor!)}>Usar esta propuesta como precio final</Button>}</section>;
+function optionValue(option: AutomaticPriceOption | null, from: Currency, to: Currency, rate: number | null) {
+  return option?.suggestedPriceMinor == null ? null : convertMinor(option.suggestedPriceMinor, from, to, rate);
 }
 
-function MarketEvidenceModal({ market, onClose }: { market: MarketOverview | null; currency: Currency; onClose: () => void }) {
-  return <Modal title="Fuentes utilizadas" onClose={onClose} width="1080px"><div className="modal__body observations-modal">{!market?.observations.length ? <p>No hay observaciones en este snapshot.</p> : <div className="observation-table" role="table" aria-label="Evidencia utilizada en el snapshot" tabIndex={0}><div className="observation-row observation-row--head" role="row"><span role="columnheader">Fuente</span><span role="columnheader">Servicio</span><span role="columnheader">Precio</span><span role="columnheader">Unidad</span><span role="columnheader">Fecha</span><span role="columnheader">Comparable</span></div>{market.observations.map((row) => {
-    const included = row.snapshotIncluded ?? row.comparisonEligibility === "ELIGIBLE";
-    const reason = row.snapshotExclusionReason || row.exclusionReason;
-    return <div className="observation-row" role="row" key={row.id}><span role="cell"><strong>{row.sourceName}</strong><small>{row.sourceType.replaceAll("_", " ")}</small></span><span role="cell">{row.subservice || row.serviceType}<small>{row.region}</small></span><span role="cell">{observationPrice(row)}{row.convertedValueMinor != null && row.convertedCurrency && <small>Convertido: {money(row.convertedValueMinor, row.convertedCurrency)} · tasa {row.exchangeRateMicros == null ? "—" : (row.exchangeRateMicros / 10_000).toLocaleString("es-AR")} · {row.exchangeRateDate || "sin fecha"}</small>}</span><span role="cell">{row.priceType}<small>{row.unit}</small></span><span role="cell">{new Date(row.publishedAt || row.retrievedAt).toLocaleDateString("es-AR")}</span><span role="cell"><b>{included ? "Sí" : "No"}</b><small>{reason}</small><button type="button" className="source-link-button" onClick={() => apiOpen(row.sourceUrl)}>Original <ArrowUpRight size={13} aria-hidden="true" /></button></span></div>;
-  })}</div>}<div className="modal__actions"><Button onClick={onClose}>Cerrar</Button></div></div></Modal>;
+function optionRange(option: AutomaticPriceOption | null, from: Currency, to: Currency, rate: number | null) {
+  if (!option || option.summary.minimumFilteredMinor == null || option.summary.maximumFilteredMinor == null) return null;
+  const minimum = convertMinor(option.summary.minimumFilteredMinor, from, to, rate);
+  const maximum = convertMinor(option.summary.maximumFilteredMinor, from, to, rate);
+  if (minimum == null || maximum == null) return null;
+  return `${formatMoney(minimum, to)} — ${formatMoney(maximum, to)}`;
 }
 
-function SuggestionExplanationModal({ market, currency, onClose }: { market: MarketOverview | null; currency: Currency; onClose: () => void }) {
-  const snapshot = market?.latestSnapshot; let summary: { strategy?: string; suggestionExplanation?: string; explanations?: string[] } = {}; try { summary = snapshot ? JSON.parse(snapshot.summaryJson) as typeof summary : {}; } catch { /* snapshot legacy */ }
-  return <Modal title="¿Por qué esta propuesta?" onClose={onClose} width="680px"><div className="modal__body suggestion-explanation">{snapshot ? <><div><span>Tu cálculo</span><strong>{formatMoney(snapshot.calculatedPriceMinor, currency)}</strong></div><div><span>Mercado comparable</span><strong>{snapshot.minimumFilteredMinor == null ? "Insuficiente" : `${formatMoney(snapshot.minimumFilteredMinor, currency)} — ${formatMoney(snapshot.maximumFilteredMinor, currency)}`}</strong></div><div><span>Mediana</span><strong>{formatMoney(snapshot.marketMedianMinor, currency)}</strong></div><div><span>Estrategia</span><strong>{summary.strategy?.replace("balanced", "equilibrada") ?? "—"}</strong></div><div className="suggestion-explanation__result"><span>Propuesta de mercado</span><strong>{formatMoney(snapshot.suggestedPriceMinor, currency)}</strong></div><div><span>Estado</span><strong>{marketSuggestionStatusLabel(snapshot.suggestionUpdateStatus)}</strong></div><p>{snapshot.suggestionUpdateMessage || summary.suggestionExplanation || marketSuggestionMessage(snapshot)}</p><ul>{summary.explanations?.map((item) => <li key={item}>{item}</li>)}</ul><small>La propuesta no aplica ni reemplaza tu precio final. El precio final permanece protegido.</small></> : <p>No existe un snapshot para explicar.</p>}<div className="modal__actions"><Button onClick={onClose}>Cerrar</Button></div></div></Modal>;
+function optionDescription(option: AutomaticPriceOption) {
+  const confidence = option.summary.confidenceLevel === "HIGH" ? "alta" : option.summary.confidenceLevel === "MEDIUM" ? "media" : "inicial";
+  return `${option.summary.comparableCount} referencias comparables · ${option.summary.sourceCount} fuentes · confianza ${confidence}.`;
 }
 
-function marketSuggestionStatusLabel(status: MarketSuggestionUpdateStatus) {
-  if (status === "APPLIED") return "Sugerido actualizado";
-  if (status === "SKIPPED_DRAFT_CHANGED") return "Borrador cambiado";
-  if (status === "INSUFFICIENT") return "Evidencia insuficiente";
-  if (status === "DISABLED") return "Sugerencias desactivadas";
-  if (status === "PENDING") return "Propuesta en preparación";
-  return "Snapshot anterior";
+function shortSource(value: string | null) {
+  if (!value) return "fuente no informada";
+  try { return new URL(value).hostname.replace(/^www\./, ""); } catch { return value; }
 }
 
-function marketSuggestionMessage(snapshot: NonNullable<MarketOverview["latestSnapshot"]>) {
-  if (snapshot.suggestionUpdateMessage) return snapshot.suggestionUpdateMessage;
-  if (snapshot.suggestionUpdateStatus === "APPLIED") return "Se actualizó sólo el precio sugerido; el alcance y el precio final no cambiaron.";
-  if (snapshot.suggestionUpdateStatus === "SKIPPED_DRAFT_CHANGED") return "La cotización cambió durante la investigación; no se modificaron tus parámetros ni tu precio final.";
-  if (snapshot.suggestionUpdateStatus === "INSUFFICIENT") return "No hay referencias comparables suficientes para proponer un precio.";
-  if (snapshot.suggestionUpdateStatus === "DISABLED") return "Las sugerencias de mercado están desactivadas; se guardó sólo la evidencia.";
-  return "Esta referencia se guardó antes de registrar el estado de la propuesta.";
+function MarketEvidenceModal({ market, onClose }: { market: MarketOverview | null; onClose: () => void }) {
+  return <Modal title="Fuentes utilizadas" onClose={onClose} width="1080px"><div className="modal__body observations-modal">{!market?.observations.length ? <p>No hay observaciones en este snapshot.</p> : <div className="observation-table" role="table" aria-label="Evidencia utilizada en el snapshot" tabIndex={0}><div className="observation-row observation-row--head" role="row"><span role="columnheader">Fuente</span><span role="columnheader">Servicio</span><span role="columnheader">Precio</span><span role="columnheader">Unidad</span><span role="columnheader">Fecha</span><span role="columnheader">Uso</span></div>{market.observations.map((row) => <ObservationRow key={row.id} row={row} />)}</div>}<div className="modal__actions"><Button onClick={onClose}>Cerrar</Button></div></div></Modal>;
 }
 
-function observationPrice(row: MarketObservation) { if (row.priceValueMinor != null) return money(row.priceValueMinor, row.currency); const minimum = row.priceMinMinor == null ? "—" : money(row.priceMinMinor, row.currency); const maximum = row.priceMaxMinor == null ? "—" : money(row.priceMaxMinor, row.currency); return `${minimum} — ${maximum}`; }
-function money(value: number, currency: string) { try { return new Intl.NumberFormat("es-AR", { style: "currency", currency, maximumFractionDigits: 2 }).format(value / 100); } catch { return `${currency} ${(value / 100).toLocaleString("es-AR")}`; } }
-function apiOpen(url: string) { void api.openMarketSource(url); }
-function relative(raw: string) { const hours = Math.max(0, Math.floor((Date.now() - new Date(raw).getTime()) / 3_600_000)); return hours < 1 ? "hace menos de 1 h" : hours < 48 ? `hace ${hours} h` : `el ${new Date(raw).toLocaleDateString("es-AR")}`; }
+function ObservationRow({ row }: { row: MarketObservation }) {
+  const included = row.snapshotIncluded ?? row.comparisonEligibility === "ELIGIBLE";
+  const reason = row.snapshotExclusionReason || row.exclusionReason;
+  return <div className="observation-row" role="row"><span role="cell"><strong>{row.sourceName}</strong><small>{row.sourceType.replaceAll("_", " ")}</small></span><span role="cell">{row.subservice || row.serviceType}<small>{row.region}</small></span><span role="cell">{observationPrice(row)}{row.convertedValueMinor != null && row.convertedCurrency && <small>Convertido: {money(row.convertedValueMinor, row.convertedCurrency)} · tasa {row.exchangeRateMicros == null ? "—" : (row.exchangeRateMicros / 10_000).toLocaleString("es-AR")} · {row.exchangeRateDate || "sin fecha"}</small>}</span><span role="cell">{row.priceType}<small>{row.unit}</small></span><span role="cell">{new Date(row.publishedAt || row.retrievedAt).toLocaleDateString("es-AR")}</span><span role="cell"><b>{included ? "Sí" : "No"}</b><small>{reason}</small><button type="button" className="source-link-button" onClick={() => void api.openMarketSource(row.sourceUrl)}>Original <ArrowUpRight size={13} aria-hidden="true" /></button></span></div>;
+}
+
+function observationPrice(row: MarketObservation) {
+  if (row.priceValueMinor != null) return money(row.priceValueMinor, row.currency);
+  const minimum = row.priceMinMinor == null ? "—" : money(row.priceMinMinor, row.currency);
+  const maximum = row.priceMaxMinor == null ? "—" : money(row.priceMaxMinor, row.currency);
+  return `${minimum} — ${maximum}`;
+}
+
+function money(value: number, currency: string) {
+  try { return new Intl.NumberFormat("es-AR", { style: "currency", currency, maximumFractionDigits: 2 }).format(value / 100); }
+  catch { return `${currency} ${(value / 100).toLocaleString("es-AR")}`; }
+}
+
+function relative(raw: string) {
+  const hours = Math.max(0, Math.floor((Date.now() - new Date(raw).getTime()) / 3_600_000));
+  return hours < 1 ? "hace menos de 1 h" : hours < 48 ? `hace ${hours} h` : `el ${new Date(raw).toLocaleDateString("es-AR")}`;
+}
